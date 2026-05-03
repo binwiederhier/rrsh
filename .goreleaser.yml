@@ -1,0 +1,76 @@
+version: 2
+before:
+  hooks:
+    - go mod download
+    - go mod tidy
+builds:
+  - id: noshell_linux_amd64
+    binary: noshell
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
+    goos: [ linux ]
+    goarch: [ amd64 ]
+  - id: noshell_linux_armv6
+    binary: noshell
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
+    goos: [ linux ]
+    goarch: [ arm ]
+    goarm: [ 6 ]
+  - id: noshell_linux_armv7
+    binary: noshell
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
+    goos: [ linux ]
+    goarch: [ arm ]
+    goarm: [ 7 ]
+  - id: noshell_linux_arm64
+    binary: noshell
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
+    goos: [ linux ]
+    goarch: [ arm64 ]
+nfpms:
+  - package_name: noshell
+    homepage: https://github.com/binwiederhier/noshell
+    maintainer: Philipp C. Heckel <philipp.heckel@gmail.com>
+    description: Restricted login shell that allowlists commands via YAML
+    license: Apache 2.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: noshell.yml.example
+        dst: /etc/noshell/noshell.yml
+        type: "config|noreplace"
+archives:
+  - id: noshell_linux
+    ids:
+      - noshell_linux_amd64
+      - noshell_linux_armv6
+      - noshell_linux_armv7
+      - noshell_linux_arm64
+    wrap_in_directory: true
+    files:
+      - LICENSE
+      - README.md
+      - noshell.yml.example
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  version_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
