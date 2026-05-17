@@ -4,16 +4,16 @@ before:
     - go mod download
     - go mod tidy
 builds:
-  - id: noshell_linux_amd64
-    binary: noshell
+  - id: rrsh_linux_amd64
+    binary: rrsh
     env:
       - CGO_ENABLED=0
     ldflags:
       - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
     goos: [ linux ]
     goarch: [ amd64 ]
-  - id: noshell_linux_armv6
-    binary: noshell
+  - id: rrsh_linux_armv6
+    binary: rrsh
     env:
       - CGO_ENABLED=0
     ldflags:
@@ -21,8 +21,8 @@ builds:
     goos: [ linux ]
     goarch: [ arm ]
     goarm: [ 6 ]
-  - id: noshell_linux_armv7
-    binary: noshell
+  - id: rrsh_linux_armv7
+    binary: rrsh
     env:
       - CGO_ENABLED=0
     ldflags:
@@ -30,8 +30,8 @@ builds:
     goos: [ linux ]
     goarch: [ arm ]
     goarm: [ 7 ]
-  - id: noshell_linux_arm64
-    binary: noshell
+  - id: rrsh_linux_arm64
+    binary: rrsh
     env:
       - CGO_ENABLED=0
     ldflags:
@@ -39,8 +39,8 @@ builds:
     goos: [ linux ]
     goarch: [ arm64 ]
 nfpms:
-  - package_name: noshell
-    homepage: https://github.com/binwiederhier/noshell
+  - package_name: rrsh
+    homepage: https://github.com/binwiederhier/rrsh
     maintainer: Philipp C. Heckel <philipp.heckel@gmail.com>
     description: Restricted login shell that allowlists commands via YAML
     license: Apache 2.0
@@ -49,21 +49,21 @@ nfpms:
       - rpm
     bindir: /usr/bin
     contents:
-      - src: noshell.yml.example
-        dst: /etc/noshell/noshell.yml
+      - src: rrsh.json.example
+        dst: /etc/rrsh/rrsh.json
         type: "config|noreplace"
 archives:
-  - id: noshell_linux
+  - id: rrsh_linux
     ids:
-      - noshell_linux_amd64
-      - noshell_linux_armv6
-      - noshell_linux_armv7
-      - noshell_linux_arm64
+      - rrsh_linux_amd64
+      - rrsh_linux_armv6
+      - rrsh_linux_armv7
+      - rrsh_linux_arm64
     wrap_in_directory: true
     files:
       - LICENSE
       - README.md
-      - noshell.yml.example
+      - rrsh.json.example
 checksum:
   name_template: 'checksums.txt'
 snapshot:

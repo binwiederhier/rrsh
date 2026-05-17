@@ -1,66 +1,74 @@
+// Package cmd is rrsh's CLI entry point and subcommand dispatcher.
+//
+// The dispatch is intentionally hand-rolled (no cobra) so the binary has no
+// external runtime dependencies — important for a security-critical tool where
+// every dependency is part of the trust boundary.
 package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
-
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const (
-	defaultConfigPath = "/etc/noshell/noshell.yml"
-	envConfigPath     = "NOSHELL_CONFIG"
+	defaultConfigPath = "/etc/rrsh/rrsh.json"
+	envConfigPath     = "RRSH_CONFIG"
+
+	exitDenied  = 126
+	exitGeneric = 1
+
+	sudoBinary = "/usr/bin/sudo"
 )
 
-var (
-	configFile  string
-	commandFlag string
-)
+// versionInfo is populated by Execute from main.go's ldflag-injected vars.
+var versionInfo string
 
-var rootCmd = &cobra.Command{
-	Use:   "noshell",
-	Short: "Restricted login shell that allowlists commands via YAML",
-	Long: `noshell is a restricted login shell. When set as a user's login shell,
-sshd invokes it with -c "<command>". noshell looks up the command in a YAML
-allowlist and either runs it (logging to syslog) or denies it.
-
-Invoked with no command, noshell prints the allowed commands and exits.
-The "run" subcommand exposes the same behavior explicitly; sshd-style
-"noshell -c <command>" invocations at the root delegate to it.`,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runE,
-}
-
-// Execute is the entrypoint used by the root main.go.
+// Execute is the entrypoint called from main.go.
 func Execute(version, commit, date string) {
-	rootCmd.Version = fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "noshell: %v\n", err)
-		os.Exit(exitGeneric)
+	versionInfo = fmt.Sprintf("rrsh %s (commit %s, built %s)", version, commit, date)
+
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "sudo":
+			sudoMain(args[1:])
+			return
+		case "run":
+			runMain(args[1:])
+			return
+		case "-h", "-help", "--help":
+			printUsage(os.Stdout)
+			return
+		case "-v", "-version", "--version":
+			fmt.Println(versionInfo)
+			return
+		}
 	}
+	runMain(args)
 }
 
-func init() {
-	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "config file (default "+defaultConfigPath+", overridden by $"+envConfigPath+")")
-	rootCmd.Flags().StringVarP(&commandFlag, "command", "c", "", "command to run (shell mode, used by sshd)")
-}
+const usageText = `rrsh — restricted login shell that allowlists commands
 
-// initConfig resolves the config file path with the precedence
-// --config flag > $NOSHELL_CONFIG > /etc/noshell/noshell.yml
-// and primes viper with it. Viper isn't unmarshaling the polymorphic
-// `commands` schema (config.Parse handles that), but having the path
-// recorded via viper makes future env-var/flag bindings trivial.
-func initConfig() {
-	if configFile == "" {
-		configFile = os.Getenv(envConfigPath)
-	}
-	if configFile == "" {
-		configFile = defaultConfigPath
-	}
-	viper.SetConfigFile(configFile)
-	viper.SetEnvPrefix("noshell")
-	viper.AutomaticEnv()
+Usage:
+  rrsh                                 print the allowlist
+  rrsh -c <command>                    run <command> (shell mode, used by sshd)
+  rrsh [--config FILE] [--] <command> [args...]
+                                          run <command> directly
+  rrsh run [...]                       alias for the default behavior
+  rrsh --help | --version
+
+Options:
+  -c <command>      command to run (shell mode)
+  --config <file>   config file (default: ` + defaultConfigPath + `,
+                    overridden by $` + envConfigPath + `)
+  --help            print this help
+  --version         print version
+
+Commands may be prefixed with "sudo" or "sudo -u USER" to request elevation;
+the rule's "as" list controls which target users are permitted.
+`
+
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, usageText)
 }

@@ -6,43 +6,36 @@ import (
 	"os/user"
 	"strings"
 
-	"github.com/pheckel/noshell/config"
-	"github.com/pheckel/noshell/executor"
-	"github.com/pheckel/noshell/logger"
-	"github.com/pheckel/noshell/matcher"
-	"github.com/spf13/cobra"
+	"github.com/binwiederhier/rrsh/config"
+	"github.com/binwiederhier/rrsh/executor"
+	"github.com/binwiederhier/rrsh/logger"
+	"github.com/binwiederhier/rrsh/matcher"
 )
 
-// sudoCmd is the privileged half of noshell's elevation flow. It is invoked by
-// the unprivileged noshell process as `/usr/bin/sudo [-u USER] noshell sudo <cmd>`,
-// where sudoers grants `<ssh-user> ALL=(<targets>) NOPASSWD: /usr/bin/noshell sudo *`.
+// sudoMain is the privileged half of rrsh's elevation flow. It is invoked
+// by the unprivileged rrsh process as `/usr/bin/sudo [-u USER] rrsh sudo <cmd>`,
+// where sudoers grants `<ssh-user> ALL=(<targets>) NOPASSWD: /usr/bin/rrsh sudo *`.
 //
 // This subcommand sits on the root trust boundary: its caller is the
 // unprivileged SSH user, and a parser bug here is a root compromise. It
 // therefore refuses to honor any caller-controlled state — config path is
-// hardcoded, --config is ignored, and the rule's `as:` list is re-validated
-// from disk against the effective euid before executing anything.
-var sudoCmd = &cobra.Command{
-	Use:    "sudo <command> [args...]",
-	Short:  "Internal: re-validate and run a command as the elevated user",
-	Hidden: true,
-	Args:   cobra.MinimumNArgs(1),
-	RunE:   sudoE,
-}
+// hardcoded, no flag parsing, and the rule's `as` list is re-validated from
+// disk against the effective euid before executing anything.
+func sudoMain(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "rrsh: sudo: missing command")
+		os.Exit(exitDenied)
+	}
 
-func init() {
-	rootCmd.AddCommand(sudoCmd)
-}
-
-func sudoE(_ *cobra.Command, args []string) error {
 	log := logger.New()
 	defer log.Close()
 
 	// Hardcoded path — we are root (or another target user). The caller is
-	// untrusted, so we must not read --config or $NOSHELL_CONFIG here.
+	// untrusted, so we must not read --config or $RRSH_CONFIG here.
 	cfg, err := config.Load(defaultConfigPath)
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
+		os.Exit(exitGeneric)
 	}
 
 	input := strings.Join(args, " ")
@@ -59,20 +52,19 @@ func sudoE(_ *cobra.Command, args []string) error {
 	rule, ok := matcher.New(cfg.Commands).Match(input)
 	if !ok {
 		log.Denied(input, me)
-		fmt.Fprintf(os.Stderr, "noshell: command not allowed: %s\n", input)
+		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
 		os.Exit(exitDenied)
 	}
 
 	allowed := resolveAllowedUsers(rule.As, origin)
 	if !contains(allowed, me) {
 		log.Denied(input, me)
-		fmt.Fprintf(os.Stderr, "noshell: %s not permitted to run as %s\n", input, me)
+		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, me)
 		os.Exit(exitDenied)
 	}
 
 	log.Allowed(input, me)
 	os.Exit(executor.New(cfg.Timeout).Execute(input, rule))
-	return nil
 }
 
 func currentUsername() string {

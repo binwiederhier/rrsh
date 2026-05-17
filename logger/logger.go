@@ -16,9 +16,9 @@ type SyslogLogger struct {
 }
 
 func New() *SyslogLogger {
-	w, err := syslog.New(syslog.LOG_AUTH|syslog.LOG_INFO, "noshell")
+	w, err := syslog.New(syslog.LOG_AUTH|syslog.LOG_INFO, "rrsh")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "noshell: warning: cannot open syslog: %v\n", err)
+		fmt.Fprintf(os.Stderr, "rrsh: warning: cannot open syslog: %v\n", err)
 		w = nil
 	}
 	return &SyslogLogger{w: w, user: currentUser()}

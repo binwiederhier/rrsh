@@ -1,6 +1,6 @@
 package main
 
-import "github.com/pheckel/noshell/cmd"
+import "github.com/binwiederhier/rrsh/cmd"
 
 // These variables are set during build time using -ldflags
 var (

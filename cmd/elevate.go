@@ -3,7 +3,7 @@ package cmd
 import (
 	"strings"
 
-	"github.com/pheckel/noshell/config"
+	"github.com/binwiederhier/rrsh/config"
 )
 
 // parseSudoPrefix strips an optional leading `sudo` (or `sudo -u USER`) sigil
@@ -11,8 +11,8 @@ import (
 // to run as: "self" if no prefix, "root" for bare `sudo`, or the username
 // after `-u`. The returned rest is the remaining command line.
 //
-// Note: `sudo` here is a noshell-internal keyword, not a call to /usr/bin/sudo.
-// noshell uses /usr/bin/sudo internally to perform the actual privilege
+// Note: `sudo` here is a rrsh-internal keyword, not a call to /usr/bin/sudo.
+// rrsh uses /usr/bin/sudo internally to perform the actual privilege
 // transition (see cmd/run.go's elevate path), but the user-facing syntax is
 // intentionally the same as real sudo so it's familiar.
 func parseSudoPrefix(input string) (target, rest string) {

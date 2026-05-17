@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pheckel/noshell/config"
+	"github.com/binwiederhier/rrsh/config"
 )
 
 // Executor runs allowlisted commands with a per-call timeout. The
@@ -45,7 +45,7 @@ func (e *Executor) Execute(input string, rule *config.CommandRule) int {
 
 	if err := c.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			os.Stderr.WriteString("noshell: command timed out\n")
+			os.Stderr.WriteString("rrsh: command timed out\n")
 			return 124
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {

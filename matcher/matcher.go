@@ -3,7 +3,7 @@ package matcher
 import (
 	"strings"
 
-	"github.com/pheckel/noshell/config"
+	"github.com/binwiederhier/rrsh/config"
 )
 
 // shellMetachars are characters that indicate shell injection attempts.

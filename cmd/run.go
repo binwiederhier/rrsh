@@ -1,64 +1,61 @@
 package cmd
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/pheckel/noshell/config"
-	"github.com/pheckel/noshell/executor"
-	"github.com/pheckel/noshell/logger"
-	"github.com/pheckel/noshell/matcher"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
+	"github.com/binwiederhier/rrsh/config"
+	"github.com/binwiederhier/rrsh/executor"
+	"github.com/binwiederhier/rrsh/logger"
+	"github.com/binwiederhier/rrsh/matcher"
 )
 
-const (
-	exitDenied  = 126
-	exitGeneric = 1
+// runMain is the default code path (also reached via `rrsh run …`).
+// It accepts the canonical sshd invocation `rrsh -c "<cmd>"` as well as
+// `rrsh [--config FILE] [--] <cmd> [args...]` for direct use.
+func runMain(args []string) {
+	fs := flag.NewFlagSet("rrsh", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.Usage = func() { printUsage(os.Stderr) }
+	var (
+		configFile  = fs.String("config", "", "")
+		commandFlag = fs.String("c", "", "")
+		showHelp    = fs.Bool("help", false, "")
+		showVersion = fs.Bool("version", false, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(exitGeneric)
+	}
+	if *showHelp {
+		printUsage(os.Stdout)
+		return
+	}
+	if *showVersion {
+		fmt.Println(versionInfo)
+		return
+	}
 
-	sudoBinary = "/usr/bin/sudo"
-)
-
-var runCmd = &cobra.Command{
-	Use:   "run [-c <command> | -- <command> [args...]]",
-	Short: "Run a command against the allowlist (default when sshd invokes noshell -c ...)",
-	Long: `Looks up the given command in the configured allowlist and either runs it
-(logging an ALLOWED event to syslog) or denies it (logging DENIED and exiting 126).
-
-Commands may optionally be prefixed with "sudo" or "sudo -u USER" to elect a
-different target user; the rule's `+"`as:`"+` list controls which targets are
-permitted. With no command, prints the allowlist and exits 0.
-
-The root noshell command delegates here when invoked with -c or positional
-args, so sshd can keep calling "noshell -c <command>" unchanged.`,
-	RunE: runE,
-}
-
-func init() {
-	rootCmd.AddCommand(runCmd)
-	runCmd.Flags().StringVarP(&commandFlag, "command", "c", "", "command to run (shell mode, used by sshd)")
-}
-
-func runE(_ *cobra.Command, args []string) error {
 	log := logger.New()
 	defer log.Close()
 
-	cfg, err := config.Load(viper.ConfigFileUsed())
+	cfg, err := config.Load(resolveConfigPath(*configFile))
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
+		os.Exit(exitGeneric)
 	}
 
-	input := resolveInput(args)
+	input := resolveInput(*commandFlag, fs.Args())
 	if input == "" {
 		printAllowed(cfg)
-		return nil
+		return
 	}
 
 	requested, bare := parseSudoPrefix(input)
 	if bare == "" {
-		fmt.Fprintf(os.Stderr, "noshell: missing command after sudo\n")
+		fmt.Fprintf(os.Stderr, "rrsh: missing command after sudo\n")
 		os.Exit(exitDenied)
 	}
 
@@ -67,14 +64,14 @@ func runE(_ *cobra.Command, args []string) error {
 	rule, ok := matcher.New(cfg.Commands).Match(bare)
 	if !ok {
 		log.Denied(input, self)
-		fmt.Fprintf(os.Stderr, "noshell: command not allowed: %s\n", input)
+		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
 		os.Exit(exitDenied)
 	}
 
 	target := resolveTarget(requested, rule.As, self)
 	if target == "" {
 		log.Denied(input, self)
-		fmt.Fprintf(os.Stderr, "noshell: %s not permitted to run as %s\n", bare, displayTarget(requested, self))
+		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", bare, displayTarget(requested, self))
 		os.Exit(exitDenied)
 	}
 
@@ -85,18 +82,36 @@ func runE(_ *cobra.Command, args []string) error {
 
 	log.Allowed(input, target)
 	os.Exit(elevate(target, bare, rule, cfg.Timeout))
-	return nil
 }
 
-// elevate re-invokes the noshell binary as `target` via /usr/bin/sudo. The
+// resolveConfigPath applies the precedence --config > $RRSH_CONFIG > default.
+func resolveConfigPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if env := os.Getenv(envConfigPath); env != "" {
+		return env
+	}
+	return defaultConfigPath
+}
+
+func resolveInput(commandFlag string, args []string) string {
+	if commandFlag != "" {
+		return commandFlag
+	}
+	if len(args) > 0 {
+		return strings.Join(args, " ")
+	}
+	return ""
+}
+
+// elevate re-invokes the rrsh binary as `target` via /usr/bin/sudo. The
 // privileged process (cmd/sudo.go) re-validates the command from disk before
-// executing — this side cannot be trusted by it. Timeout handling and exit-
-// code propagation are reused from the executor by treating the entire
-// `sudo ... noshell sudo ...` invocation as a single command.
+// executing — this side cannot be trusted by it.
 func elevate(target, bare string, rule *config.CommandRule, globalTimeout time.Duration) int {
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "noshell: %v\n", err)
+		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		return exitGeneric
 	}
 	var prefix string
@@ -106,16 +121,6 @@ func elevate(target, bare string, rule *config.CommandRule, globalTimeout time.D
 		prefix = fmt.Sprintf("%s -n -u %s %s sudo", sudoBinary, target, self)
 	}
 	return executor.New(globalTimeout).Execute(prefix+" "+bare, rule)
-}
-
-func resolveInput(args []string) string {
-	if commandFlag != "" {
-		return commandFlag
-	}
-	if len(args) > 0 {
-		return strings.Join(args, " ")
-	}
-	return ""
 }
 
 func displayTarget(requested, self string) string {

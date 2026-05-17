@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pheckel/noshell/config"
+	"github.com/binwiederhier/rrsh/config"
 )
 
 func TestExecute_Success(t *testing.T) {

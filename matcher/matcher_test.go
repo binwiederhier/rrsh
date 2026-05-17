@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/pheckel/noshell/config"
+	"github.com/binwiederhier/rrsh/config"
 )
 
 func testMatcher() *Matcher {

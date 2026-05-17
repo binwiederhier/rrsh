@@ -1,0 +1,22 @@
+{
+  "timeout": "10s",
+  "commands": [
+    { "path": "/usr/bin/whoami" },
+    { "path": "/usr/bin/ls",         "args": "^-la /var/log/.*$" },
+    { "path": "/usr/bin/cat",        "args": "^/var/log/.*$" },
+    { "path": "/usr/bin/systemctl",  "args": "^status .+$" },
+    { "path": "/usr/bin/journalctl", "args": "^-u .+$" },
+    { "path": "/usr/bin/df" },
+    { "path": "/usr/bin/free" },
+    { "path": "/usr/bin/uptime" },
+    { "path": "/usr/bin/ps",         "args": "^(aux|-ef)$" },
+    { "path": "/usr/sbin/ip",        "args": "^(addr|route|link)$" },
+    { "path": "/usr/bin/ss",         "args": "^-(t|u)lnp$" },
+    { "path": "/usr/bin/ping",       "args": "^-c \\d+ .+$", "timeout": "30s" },
+    { "path": "/usr/bin/dig" },
+    { "path": "/usr/bin/top",        "args": "^-bn1$" },
+
+    { "path": "/bin/systemctl",      "args": "^restart ntfy$",       "as": ["root"] },
+    { "path": "/bin/journalctl",     "args": "^-fu ntfy$",           "as": ["self", "root"] }
+  ]
+}
