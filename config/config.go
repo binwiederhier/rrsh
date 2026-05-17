@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -9,10 +9,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultTimeout is applied when the YAML omits the global `timeout` key.
+const DefaultTimeout = 10 * time.Second
+
 type CommandRule struct {
-	Path       string
+	Path        string
 	ArgsPattern *regexp.Regexp
-	Timeout    time.Duration
+	Timeout     time.Duration
 }
 
 type Config struct {
@@ -25,15 +28,15 @@ type rawConfig struct {
 	Commands []interface{} `yaml:"commands"`
 }
 
-func LoadConfig(path string) (*Config, error) {
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
-	return ParseConfig(data)
+	return Parse(data)
 }
 
-func ParseConfig(data []byte) (*Config, error) {
+func Parse(data []byte) (*Config, error) {
 	var raw rawConfig
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing YAML: %w", err)
@@ -48,7 +51,7 @@ func ParseConfig(data []byte) (*Config, error) {
 		}
 		cfg.Timeout = d
 	} else {
-		cfg.Timeout = 10 * time.Second
+		cfg.Timeout = DefaultTimeout
 	}
 
 	for _, entry := range raw.Commands {

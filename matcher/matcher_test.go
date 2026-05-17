@@ -1,69 +1,65 @@
-package main
+package matcher
 
 import (
 	"regexp"
 	"testing"
+
+	"github.com/pheckel/noshell/config"
 )
 
-func testRules() []CommandRule {
-	return []CommandRule{
+func testMatcher() *Matcher {
+	return New([]config.CommandRule{
 		{Path: "/usr/bin/whoami"},
 		{Path: "/usr/bin/ls", ArgsPattern: regexp.MustCompile(`^-la /var/log/.*$`)},
 		{Path: "/usr/bin/ps", ArgsPattern: regexp.MustCompile(`^(aux|-ef)$`)},
 		{Path: "/usr/bin/df"},
-	}
+	})
 }
 
 func TestMatch_AllowedNoArgs(t *testing.T) {
-	rules := testRules()
-	matched, rule := Match(rules, "/usr/bin/whoami")
-	if !matched || rule.Path != "/usr/bin/whoami" {
+	rule, ok := testMatcher().Match("/usr/bin/whoami")
+	if !ok || rule.Path != "/usr/bin/whoami" {
 		t.Error("whoami should be allowed")
 	}
 }
 
 func TestMatch_AllowedWithArgs(t *testing.T) {
-	rules := testRules()
-	matched, rule := Match(rules, "/usr/bin/ls -la /var/log/syslog")
-	if !matched || rule.Path != "/usr/bin/ls" {
+	rule, ok := testMatcher().Match("/usr/bin/ls -la /var/log/syslog")
+	if !ok || rule.Path != "/usr/bin/ls" {
 		t.Error("ls -la /var/log/syslog should be allowed")
 	}
 }
 
 func TestMatch_AllowedNoRestrictionWithArgs(t *testing.T) {
-	rules := testRules()
-	matched, _ := Match(rules, "/usr/bin/df -h")
-	if !matched {
+	_, ok := testMatcher().Match("/usr/bin/df -h")
+	if !ok {
 		t.Error("df -h should be allowed (no args restriction)")
 	}
 }
 
 func TestMatch_DeniedWrongArgs(t *testing.T) {
-	rules := testRules()
-	matched, _ := Match(rules, "/usr/bin/ls -la /etc/passwd")
-	if matched {
+	_, ok := testMatcher().Match("/usr/bin/ls -la /etc/passwd")
+	if ok {
 		t.Error("ls -la /etc/passwd should be denied")
 	}
 }
 
 func TestMatch_DeniedUnknownCommand(t *testing.T) {
-	rules := testRules()
-	matched, _ := Match(rules, "/usr/bin/rm -rf /")
-	if matched {
+	_, ok := testMatcher().Match("/usr/bin/rm -rf /")
+	if ok {
 		t.Error("rm should be denied")
 	}
 }
 
 func TestMatch_DeniedRelativePath(t *testing.T) {
-	rules := testRules()
-	matched, _ := Match(rules, "whoami")
-	if matched {
+	_, ok := testMatcher().Match("whoami")
+	if ok {
 		t.Error("relative path should be denied")
 	}
 }
 
 func TestMatch_DeniedMetachars(t *testing.T) {
-	rules := testRules()
+	m := testMatcher()
 
 	tests := []string{
 		"/usr/bin/whoami; rm -rf /",
@@ -77,36 +73,30 @@ func TestMatch_DeniedMetachars(t *testing.T) {
 	}
 
 	for _, input := range tests {
-		matched, _ := Match(rules, input)
-		if matched {
+		if _, ok := m.Match(input); ok {
 			t.Errorf("should deny metachar input: %s", input)
 		}
 	}
 }
 
 func TestMatch_ArgsRegex(t *testing.T) {
-	rules := testRules()
+	m := testMatcher()
 
-	matched, _ := Match(rules, "/usr/bin/ps aux")
-	if !matched {
+	if _, ok := m.Match("/usr/bin/ps aux"); !ok {
 		t.Error("ps aux should be allowed")
 	}
 
-	matched, _ = Match(rules, "/usr/bin/ps -ef")
-	if !matched {
+	if _, ok := m.Match("/usr/bin/ps -ef"); !ok {
 		t.Error("ps -ef should be allowed")
 	}
 
-	matched, _ = Match(rules, "/usr/bin/ps -aux --sort")
-	if matched {
+	if _, ok := m.Match("/usr/bin/ps -aux --sort"); ok {
 		t.Error("ps -aux --sort should be denied")
 	}
 }
 
 func TestMatch_EmptyInput(t *testing.T) {
-	rules := testRules()
-	matched, _ := Match(rules, "")
-	if matched {
+	if _, ok := testMatcher().Match(""); ok {
 		t.Error("empty input should not match")
 	}
 }

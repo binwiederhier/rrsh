@@ -1,11 +1,11 @@
-package main
+package config
 
 import (
 	"testing"
 	"time"
 )
 
-func TestParseConfig_Valid(t *testing.T) {
+func TestParse_Valid(t *testing.T) {
 	data := []byte(`
 timeout: 5s
 commands:
@@ -13,7 +13,7 @@ commands:
   - /usr/bin/ls: "^-la$"
   - /usr/bin/ping: { args: "^-c \\d+ .+$", timeout: 30s }
 `)
-	cfg, err := ParseConfig(data)
+	cfg, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,12 +54,12 @@ commands:
 	}
 }
 
-func TestParseConfig_DefaultTimeout(t *testing.T) {
+func TestParse_DefaultTimeout(t *testing.T) {
 	data := []byte(`
 commands:
   - /usr/bin/whoami
 `)
-	cfg, err := ParseConfig(data)
+	cfg, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,26 +68,26 @@ commands:
 	}
 }
 
-func TestParseConfig_InvalidRegex(t *testing.T) {
+func TestParse_InvalidRegex(t *testing.T) {
 	data := []byte(`
 commands:
   - /usr/bin/ls: "[invalid"
 `)
-	_, err := ParseConfig(data)
+	_, err := Parse(data)
 	if err == nil {
 		t.Fatal("expected error for invalid regex")
 	}
 }
 
-func TestParseConfig_InvalidYAML(t *testing.T) {
+func TestParse_InvalidYAML(t *testing.T) {
 	data := []byte(`{{{`)
-	_, err := ParseConfig(data)
+	_, err := Parse(data)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
 	}
 }
 
-func TestParseConfig_AllFormats(t *testing.T) {
+func TestParse_AllFormats(t *testing.T) {
 	data := []byte(`
 timeout: 10s
 commands:
@@ -95,7 +95,7 @@ commands:
   - /usr/bin/ls: "^-la$"
   - /usr/bin/ping: { args: "^-c \\d+$", timeout: 20s }
 `)
-	cfg, err := ParseConfig(data)
+	cfg, err := Parse(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
