@@ -24,18 +24,23 @@ func New() *SyslogLogger {
 	return &SyslogLogger{w: w, user: currentUser()}
 }
 
-func (l *SyslogLogger) Allowed(input string) {
+// Allowed records a permitted command. asUser is the user the command will
+// actually run as (equal to the SSH user for un-elevated commands, "root" or
+// another user for elevated ones).
+func (l *SyslogLogger) Allowed(input, asUser string) {
 	if l.w == nil {
 		return
 	}
-	l.w.Info(fmt.Sprintf("ALLOWED: user=%s cmd=%s", l.user, input))
+	l.w.Info(formatEvent("ALLOWED", l.user, asUser, input))
 }
 
-func (l *SyslogLogger) Denied(input string) {
+// Denied records a rejected command. asUser is the user the caller asked to
+// run as (or the current user when no elevation was requested).
+func (l *SyslogLogger) Denied(input, asUser string) {
 	if l.w == nil {
 		return
 	}
-	l.w.Warning(fmt.Sprintf("DENIED: user=%s cmd=%s", l.user, input))
+	l.w.Warning(formatEvent("DENIED", l.user, asUser, input))
 }
 
 func (l *SyslogLogger) Close() error {
@@ -43,6 +48,15 @@ func (l *SyslogLogger) Close() error {
 		return nil
 	}
 	return l.w.Close()
+}
+
+// formatEvent omits the as= field when it equals the calling user — the
+// common no-elevation case stays uncluttered while elevated calls stand out.
+func formatEvent(kind, user, asUser, input string) string {
+	if asUser == "" || asUser == user {
+		return fmt.Sprintf("%s: user=%s cmd=%s", kind, user, input)
+	}
+	return fmt.Sprintf("%s: user=%s as=%s cmd=%s", kind, user, asUser, input)
 }
 
 func currentUser() string {

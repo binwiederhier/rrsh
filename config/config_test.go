@@ -87,6 +87,87 @@ func TestParse_InvalidYAML(t *testing.T) {
 	}
 }
 
+func TestParse_AsDefaults(t *testing.T) {
+	data := []byte(`
+commands:
+  - /usr/bin/whoami
+  - /usr/bin/ls: "^-la$"
+  - /usr/bin/ping: { args: "^-c \\d+$" }
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for i, r := range cfg.Commands {
+		if len(r.As) != 1 || r.As[0] != SelfUser {
+			t.Errorf("command[%d] (%s).As = %v, want [self]", i, r.Path, r.As)
+		}
+	}
+}
+
+func TestParse_AsList(t *testing.T) {
+	data := []byte(`
+commands:
+  - /bin/systemctl: { args: "^restart .+$", as: [root] }
+  - /usr/bin/whoami: { as: [self, root] }
+  - /bin/deploy.sh: { as: [self, deploy] }
+`)
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := [][]string{
+		{"root"},
+		{"self", "root"},
+		{"self", "deploy"},
+	}
+	for i, w := range want {
+		got := cfg.Commands[i].As
+		if len(got) != len(w) {
+			t.Errorf("command[%d].As = %v, want %v", i, got, w)
+			continue
+		}
+		for j := range w {
+			if got[j] != w[j] {
+				t.Errorf("command[%d].As[%d] = %q, want %q", i, j, got[j], w[j])
+			}
+		}
+	}
+}
+
+func TestParse_AsRejectsScalar(t *testing.T) {
+	data := []byte(`
+commands:
+  - /usr/bin/whoami: { as: root }
+`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("expected error: `as` must be a list, not a scalar")
+	}
+}
+
+func TestParse_AsRejectsEmpty(t *testing.T) {
+	data := []byte(`
+commands:
+  - /usr/bin/whoami: { as: [] }
+`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("expected error: `as` must not be empty")
+	}
+}
+
+func TestParse_AsRejectsDuplicates(t *testing.T) {
+	data := []byte(`
+commands:
+  - /usr/bin/whoami: { as: [self, self] }
+`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("expected error: duplicate `as` entry")
+	}
+}
+
 func TestParse_AllFormats(t *testing.T) {
 	data := []byte(`
 timeout: 10s
