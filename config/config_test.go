@@ -46,6 +46,22 @@ func TestParse_DefaultTimeout(t *testing.T) {
 	}
 }
 
+func TestParse_Description(t *testing.T) {
+	cfg, err := Parse([]byte(`{"commands": [
+		{"path": "/usr/bin/whoami", "description": "Show effective username."},
+		{"path": "/bin/systemctl", "args": "^restart ntfy$", "as": ["root"]}
+	]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Commands[0].Description != "Show effective username." {
+		t.Errorf("command[0].Description = %q, want %q", cfg.Commands[0].Description, "Show effective username.")
+	}
+	if cfg.Commands[1].Description != "" {
+		t.Errorf("command[1].Description = %q, want empty", cfg.Commands[1].Description)
+	}
+}
+
 func TestParse_AsDefaults(t *testing.T) {
 	cfg, err := Parse([]byte(`{"commands": [
 		{"path": "/usr/bin/whoami"},

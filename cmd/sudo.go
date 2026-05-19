@@ -13,14 +13,20 @@ import (
 )
 
 // sudoMain is the privileged half of rrsh's elevation flow. It is invoked
-// by the unprivileged rrsh process as `/usr/bin/sudo [-u USER] rrsh sudo <cmd>`,
+// by the unprivileged rrsh process as:
+//
+//	/usr/bin/sudo [-u USER] /usr/bin/rrsh sudo <path> <argv...>
+//
 // where sudoers grants `<ssh-user> ALL=(<targets>) NOPASSWD: /usr/bin/rrsh sudo *`.
 //
 // This subcommand sits on the root trust boundary: its caller is the
 // unprivileged SSH user, and a parser bug here is a root compromise. It
 // therefore refuses to honor any caller-controlled state — config path is
-// hardcoded, no flag parsing, and the rule's `as` list is re-validated from
-// disk against the effective euid before executing anything.
+// hardcoded, no flag parsing, and the rule's `as` list is re-validated
+// from disk against the effective euid before executing anything.
+//
+// Argv arrives directly via os.Args (passed through by sudo without
+// reinterpretation), so no shell-string parsing happens here either.
 func sudoMain(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "rrsh: sudo: missing command")
@@ -38,18 +44,20 @@ func sudoMain(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	input := strings.Join(args, " ")
+	path := args[0]
+	argv := args[1:]
+	input := joinForLog(path, argv)
 
 	me := currentUsername()
 	origin := os.Getenv("SUDO_USER")
 	if origin == "" {
 		// Called directly without /usr/bin/sudo in front. No actual
 		// elevation happened; `me` is also the origin. Still safe — we'll
-		// only execute if `me` is in the rule's resolved as: list.
+		// only execute if `me` is in the rule's resolved `as:` list.
 		origin = me
 	}
 
-	rule, ok := matcher.New(cfg.Commands).Match(input)
+	rule, ok := matcher.New(cfg.Commands).Match(path, argv)
 	if !ok {
 		log.Denied(input, me)
 		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
@@ -64,7 +72,17 @@ func sudoMain(args []string) {
 	}
 
 	log.Allowed(input, me)
-	os.Exit(executor.New(cfg.Timeout).Execute(input, rule))
+	res := executor.New(cfg.Timeout).Execute(path, argv, rule, os.Stdin)
+
+	// Forward captured streams to our stdio so the parent (executor in
+	// the unprivileged half) sees them on the pipe.
+	if len(res.Stdout) > 0 {
+		os.Stdout.Write(res.Stdout)
+	}
+	if len(res.Stderr) > 0 {
+		os.Stderr.Write(res.Stderr)
+	}
+	os.Exit(res.ExitCode)
 }
 
 func currentUsername() string {
@@ -82,4 +100,11 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func joinForLog(path string, argv []string) string {
+	if len(argv) == 0 {
+		return path
+	}
+	return path + " " + strings.Join(argv, " ")
 }

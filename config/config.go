@@ -51,25 +51,40 @@ type CommandRule struct {
 	// SSH user. Other entries are real usernames (e.g. "root", "deploy").
 	// Defaults to [SelfUser] when omitted in the config.
 	As []string
+	// Description is a free-text explanation of the rule shown to the AI
+	// consumer via list_commands. Optional.
+	Description string
 }
 
 type Config struct {
-	Timeout  time.Duration
-	Commands []CommandRule
+	// Name overrides the default server name reported in MCP's
+	// serverInfo.name (e.g. "ntfy-prod-1"). Optional. Defaults to "rrsh".
+	Name string
+	// Instructions is host-specific text returned in MCP's
+	// initialize.instructions field. This is where you tell the AI what
+	// this host is, what kind of access it has, and any caveats. The AI
+	// fetches this on first contact, so it can replace the need for a
+	// per-host system prompt. Optional.
+	Instructions string
+	Timeout      time.Duration
+	Commands     []CommandRule
 }
 
 // rawConfig mirrors the on-disk JSON shape. Strings for timeout/args keep the
 // JSON readable; we convert + validate after unmarshal.
 type rawConfig struct {
-	Timeout  string    `json:"timeout"`
-	Commands []rawRule `json:"commands"`
+	Name         string    `json:"name"`
+	Instructions string    `json:"instructions"`
+	Timeout      string    `json:"timeout"`
+	Commands     []rawRule `json:"commands"`
 }
 
 type rawRule struct {
-	Path    string   `json:"path"`
-	Args    string   `json:"args"`
-	Timeout string   `json:"timeout"`
-	As      []string `json:"as"`
+	Path        string   `json:"path"`
+	Args        string   `json:"args"`
+	Timeout     string   `json:"timeout"`
+	As          []string `json:"as"`
+	Description string   `json:"description"`
 }
 
 // Load reads and parses the config file at path.
@@ -90,7 +105,11 @@ func Parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	cfg := &Config{Timeout: DefaultTimeout}
+	cfg := &Config{
+		Name:         raw.Name,
+		Instructions: raw.Instructions,
+		Timeout:      DefaultTimeout,
+	}
 	if raw.Timeout != "" {
 		d, err := time.ParseDuration(raw.Timeout)
 		if err != nil {
@@ -136,6 +155,7 @@ func convertRule(r rawRule) (CommandRule, error) {
 		return CommandRule{}, err
 	}
 	rule.As = as
+	rule.Description = r.Description
 	return rule, nil
 }
 

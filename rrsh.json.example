@@ -1,22 +1,55 @@
 {
   "timeout": "10s",
   "commands": [
-    { "path": "/usr/bin/whoami" },
-    { "path": "/usr/bin/ls",         "args": "^-la /var/log/.*$" },
-    { "path": "/usr/bin/cat",        "args": "^/var/log/.*$" },
-    { "path": "/usr/bin/systemctl",  "args": "^status .+$" },
-    { "path": "/usr/bin/journalctl", "args": "^-u .+$" },
-    { "path": "/usr/bin/df" },
-    { "path": "/usr/bin/free" },
-    { "path": "/usr/bin/uptime" },
-    { "path": "/usr/bin/ps",         "args": "^(aux|-ef)$" },
-    { "path": "/usr/sbin/ip",        "args": "^(addr|route|link)$" },
-    { "path": "/usr/bin/ss",         "args": "^-(t|u)lnp$" },
-    { "path": "/usr/bin/ping",       "args": "^-c \\d+ .+$", "timeout": "30s" },
-    { "path": "/usr/bin/dig" },
-    { "path": "/usr/bin/top",        "args": "^-bn1$" },
+    { "path": "/usr/bin/whoami",
+      "description": "Show the effective username." },
 
-    { "path": "/bin/systemctl",      "args": "^restart ntfy$",       "as": ["root"] },
-    { "path": "/bin/journalctl",     "args": "^-fu ntfy$",           "as": ["self", "root"] }
+    { "path": "/usr/bin/ls",         "args": "^-la /var/log/.*$",
+      "description": "List a log directory in detail." },
+
+    { "path": "/usr/bin/cat",        "args": "^/var/log/.*$",
+      "description": "Read a log file." },
+
+    { "path": "/usr/bin/systemctl",  "args": "^status .+$",
+      "description": "Check the status of a systemd unit." },
+
+    { "path": "/usr/bin/journalctl", "args": "^-u .+$",
+      "description": "Show the journal for a systemd unit." },
+
+    { "path": "/usr/bin/df",
+      "description": "Report disk usage." },
+
+    { "path": "/usr/bin/free",
+      "description": "Report memory usage." },
+
+    { "path": "/usr/bin/uptime",
+      "description": "Show system uptime and load average." },
+
+    { "path": "/usr/bin/ps",         "args": "^(aux|-ef)$",
+      "description": "List processes." },
+
+    { "path": "/usr/sbin/ip",        "args": "^(addr|route|link)$",
+      "description": "Show network interfaces, routes, or links." },
+
+    { "path": "/usr/bin/ss",         "args": "^-(t|u)lnp$",
+      "description": "List listening TCP or UDP sockets with PIDs." },
+
+    { "path": "/usr/bin/ping",       "args": "^-c \\d+ .+$", "timeout": "30s",
+      "description": "Ping a host a fixed number of times." },
+
+    { "path": "/usr/bin/dig",
+      "description": "Perform DNS lookups." },
+
+    { "path": "/usr/bin/top",        "args": "^-bn1$",
+      "description": "Take one batch-mode snapshot of top." },
+
+    { "path": "/usr/bin/grep",
+      "description": "Filter input lines. Useful as a pipeline stage." },
+
+    { "path": "/bin/systemctl",      "args": "^restart ntfy$",       "as": ["root"],
+      "description": "Restart the ntfy systemd unit (always as root)." },
+
+    { "path": "/bin/journalctl",     "args": "^-fu ntfy$",           "as": ["self", "root"],
+      "description": "Follow the ntfy unit log; can be invoked as self or root." }
   ]
 }

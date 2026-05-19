@@ -4,19 +4,23 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/binwiederhier/rrsh/config"
-	"github.com/binwiederhier/rrsh/executor"
 	"github.com/binwiederhier/rrsh/logger"
-	"github.com/binwiederhier/rrsh/matcher"
+	"github.com/binwiederhier/rrsh/mcp"
 )
 
-// runMain is the default code path (also reached via `rrsh run …`).
-// It accepts the canonical sshd invocation `rrsh -c "<cmd>"` as well as
-// `rrsh [--config FILE] [--] <cmd> [args...]` for direct use.
-func runMain(args []string) {
+// serveMain is the default code path. rrsh exposes a JSON-RPC server over
+// stdin/stdout — no shell-string parsing, no `-c` mode. When invoked with
+// `-c "..."` or positional args, it errors out pointing the caller to MCP.
+//
+// Typical invocations:
+//
+//	rrsh                         # sshd login shell: read NDJSON from stdin
+//	rrsh --config /etc/rrsh.json # same, custom config
+//
+// Anything else is the legacy shell mode that has been removed.
+func serveMain(args []string) {
 	fs := flag.NewFlagSet("rrsh", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() { printUsage(os.Stderr) }
@@ -38,6 +42,11 @@ func runMain(args []string) {
 		return
 	}
 
+	if *commandFlag != "" || fs.NArg() > 0 {
+		printShellModeRejection(os.Stderr)
+		os.Exit(exitGeneric)
+	}
+
 	log := logger.New()
 	defer log.Close()
 
@@ -47,41 +56,57 @@ func runMain(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	input := resolveInput(*commandFlag, fs.Args())
-	if input == "" {
-		printAllowed(cfg)
-		return
+	srv := mcp.New(cfg, log, currentUsername(), mcp.SelfBinary(), os.Stdin, os.Stdout)
+	if err := srv.Serve(); err != nil {
+		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
+		os.Exit(exitGeneric)
 	}
+}
 
-	requested, bare := parseSudoPrefix(input)
-	if bare == "" {
-		fmt.Fprintf(os.Stderr, "rrsh: missing command after sudo\n")
-		os.Exit(exitDenied)
+// printShellModeRejection is the breadcrumb shown when something (a human
+// or an AI agent) tries to use rrsh as a traditional shell. It is the AI's
+// most likely first encounter with rrsh: a one-line instruction like
+// "you can diagnose the host via ssh rrsh@server" will most often result
+// in the AI trying `ssh rrsh@server whoami` or similar first. The text
+// here has to be enough for the AI to recover and discover JSON-RPC on
+// its own.
+func printShellModeRejection(w *os.File) {
+	fmt.Fprint(w, `rrsh: this is a JSON-RPC server, not an interactive shell.
+
+To use it, send newline-delimited JSON-RPC 2.0 requests over SSH stdin:
+
+  echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+    | ssh -T `+sshTargetHint()+`
+
+Two tools are exposed:
+  - list_commands  — describes which commands this host permits
+  - run_command    — runs one command (argv slice) or a pipeline
+
+Typical first session:
+
+  printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ai","version":"0"}}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_commands","arguments":{}}}' \
+    | ssh -T `+sshTargetHint()+`
+
+The initialize response includes an "instructions" field with host-specific
+guidance — read it first.
+`)
+}
+
+// sshTargetHint returns user@host derived from the environment, falling
+// back to a generic placeholder. The goal is to make the example
+// copy-pastable for the caller who just hit the error.
+func sshTargetHint() string {
+	user := currentUsername()
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "<host>"
 	}
-
-	self := currentUsername()
-
-	rule, ok := matcher.New(cfg.Commands).Match(bare)
-	if !ok {
-		log.Denied(input, self)
-		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
-		os.Exit(exitDenied)
+	if user == "" || user == "unknown" {
+		user = "<user>"
 	}
-
-	target := resolveTarget(requested, rule.As, self)
-	if target == "" {
-		log.Denied(input, self)
-		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", bare, displayTarget(requested, self))
-		os.Exit(exitDenied)
-	}
-
-	if target == self {
-		log.Allowed(input, self)
-		os.Exit(executor.New(cfg.Timeout).Execute(bare, rule))
-	}
-
-	log.Allowed(input, target)
-	os.Exit(elevate(target, bare, rule, cfg.Timeout))
+	return user + "@" + host
 }
 
 // resolveConfigPath applies the precedence --config > $RRSH_CONFIG > default.
@@ -93,58 +118,4 @@ func resolveConfigPath(flagValue string) string {
 		return env
 	}
 	return defaultConfigPath
-}
-
-func resolveInput(commandFlag string, args []string) string {
-	if commandFlag != "" {
-		return commandFlag
-	}
-	if len(args) > 0 {
-		return strings.Join(args, " ")
-	}
-	return ""
-}
-
-// elevate re-invokes the rrsh binary as `target` via /usr/bin/sudo. The
-// privileged process (cmd/sudo.go) re-validates the command from disk before
-// executing — this side cannot be trusted by it.
-func elevate(target, bare string, rule *config.CommandRule, globalTimeout time.Duration) int {
-	self, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
-		return exitGeneric
-	}
-	var prefix string
-	if target == "root" {
-		prefix = fmt.Sprintf("%s -n %s sudo", sudoBinary, self)
-	} else {
-		prefix = fmt.Sprintf("%s -n -u %s %s sudo", sudoBinary, target, self)
-	}
-	return executor.New(globalTimeout).Execute(prefix+" "+bare, rule)
-}
-
-func displayTarget(requested, self string) string {
-	if requested == config.SelfUser {
-		return self
-	}
-	return requested
-}
-
-func printAllowed(cfg *config.Config) {
-	fmt.Println("Allowed commands:")
-	for _, rule := range cfg.Commands {
-		suffix := ""
-		if !isDefaultAs(rule.As) {
-			suffix = "  [as: " + strings.Join(rule.As, ", ") + "]"
-		}
-		if rule.ArgsPattern != nil {
-			fmt.Printf("  %s %s%s\n", rule.Path, rule.ArgsPattern.String(), suffix)
-		} else {
-			fmt.Printf("  %s%s\n", rule.Path, suffix)
-		}
-	}
-}
-
-func isDefaultAs(as []string) bool {
-	return len(as) == 1 && as[0] == config.SelfUser
 }

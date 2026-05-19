@@ -2,32 +2,6 @@ package cmd
 
 import "testing"
 
-func TestParseSudoPrefix(t *testing.T) {
-	tests := []struct {
-		input      string
-		wantTarget string
-		wantRest   string
-	}{
-		{"whoami", "self", "whoami"},
-		{"/usr/bin/whoami", "self", "/usr/bin/whoami"},
-		{"sudo whoami", "root", "whoami"},
-		{"sudo /bin/systemctl restart ntfy", "root", "/bin/systemctl restart ntfy"},
-		{"sudo -u deploy /bin/deploy.sh", "deploy", "/bin/deploy.sh"},
-		{"sudo -u deploy /bin/deploy.sh arg1 arg2", "deploy", "/bin/deploy.sh arg1 arg2"},
-		{"sudoers --check", "self", "sudoers --check"}, // false-positive guard
-		{"sudo", "root", ""},
-		{"  sudo whoami", "root", "whoami"},
-		{"sudo  -u  deploy  /bin/foo", "deploy", "/bin/foo"},
-	}
-	for _, tc := range tests {
-		gotTarget, gotRest := parseSudoPrefix(tc.input)
-		if gotTarget != tc.wantTarget || gotRest != tc.wantRest {
-			t.Errorf("parseSudoPrefix(%q) = (%q, %q), want (%q, %q)",
-				tc.input, gotTarget, gotRest, tc.wantTarget, tc.wantRest)
-		}
-	}
-}
-
 func TestResolveTarget(t *testing.T) {
 	tests := []struct {
 		name      string
