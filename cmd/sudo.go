@@ -3,14 +3,20 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/user"
 	"strings"
 
 	"github.com/binwiederhier/rrsh/config"
-	"github.com/binwiederhier/rrsh/executor"
+	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
+	"github.com/binwiederhier/rrsh/util"
 )
+
+// envSudoUser is the environment variable sudo sets to the original
+// invoking username. The privileged half reads it to recover who asked
+// for the elevation, since the effective uid by that point is the
+// target (root/deploy/etc.), not the SSH user.
+const envSudoUser = "SUDO_USER"
 
 // runSudo is the privileged half of rrsh's elevation flow. It is invoked
 // by the unprivileged rrsh process as:
@@ -58,8 +64,8 @@ func runSudo(args []string) {
 	argv := args[1:]
 	input := joinForLog(path, argv)
 
-	me := currentUsername()
-	origin := os.Getenv("SUDO_USER")
+	me := util.CurrentUser()
+	origin := os.Getenv(envSudoUser)
 	if origin == "" {
 		// Called directly without /usr/bin/sudo in front. No actual
 		// elevation happened; `me` is also the origin. Still safe — we'll
@@ -82,7 +88,7 @@ func runSudo(args []string) {
 	}
 
 	log.Allowed(input, me)
-	res := executor.New(cfg.Timeout).Execute(path, argv, rule, os.Stdin)
+	res := exec.New().Execute(path, argv, rule, os.Stdin)
 
 	// Forward captured streams to our stdio so the parent (executor in
 	// the unprivileged half) sees them on the pipe.
@@ -93,14 +99,6 @@ func runSudo(args []string) {
 		os.Stderr.Write(res.Stderr)
 	}
 	os.Exit(res.ExitCode)
-}
-
-func currentUsername() string {
-	u, err := user.Current()
-	if err != nil {
-		return "unknown"
-	}
-	return u.Username
 }
 
 func contains(haystack []string, needle string) bool {

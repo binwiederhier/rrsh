@@ -64,19 +64,19 @@ Two patterns. Pick one based on whether you want the host registered up front, o
 **A. Register as an MCP server** (transport is `ssh -T`, no port, no daemon):
 
 ```bash
-claude mcp add rrsh-prod -- ssh -T ai@prod.example.com
+claude mcp add rrsh-prod -- ssh -T rrsh@prod.example.com
 ```
 
 In a Claude session, the two tools (`list_commands`, `run_command`) become available. Claude is expected to call `list_commands` first to discover what is permitted, then construct `run_command` calls with a structured `argv` slice. The MCP `initialize` response also includes any host-specific `instructions` you set in the config (see [Configuration](#configuration)).
 
-**B. Drop a one-liner into the session** ("you can diagnose this host via `ssh ai@prod.example.com`"). No MCP registration. Claude SSHs ad-hoc using its bash tool. The first time Claude tries `ssh ai@prod.example.com whoami`, it gets an instructive rejection that explains how to send JSON-RPC requests:
+**B. Drop a one-liner into the session** ("you can diagnose this host via `ssh rrsh@prod.example.com`"). No MCP registration. Claude SSHs ad-hoc using its bash tool. The first time Claude tries `ssh rrsh@prod.example.com whoami`, it gets an instructive rejection that explains how to send JSON-RPC requests:
 
 ```
 rrsh: this is a JSON-RPC server, not an interactive shell.
 
 To use it, send newline-delimited JSON-RPC 2.0 requests over SSH stdin:
   echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-    | ssh -T ai@prod.example.com
+    | ssh -T rrsh@prod.example.com
 …
 ```
 
@@ -90,7 +90,7 @@ From there Claude calls `initialize`, reads the `instructions` field for host co
 {
   "name": "ntfy-prod-1",
   "instructions": "You are on the ntfy production server. Use list_commands to see what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
-  "timeout": "10s",
+  "sudo": true,
   "commands": [
     { "path": "/usr/bin/whoami",
       "description": "Show the effective username." },
@@ -98,8 +98,8 @@ From there Claude calls `initialize`, reads the `instructions` field for host co
     { "path": "/usr/bin/journalctl", "args": "^-u .+$",
       "description": "Show the journal for a systemd unit." },
 
-    { "path": "/usr/bin/ping",       "args": "^-c \\d+ .+$", "timeout": "30s",
-      "description": "Ping a host a fixed number of times." },
+    { "path": "/usr/bin/ping",       "args": "^-c \\d+ .+$", "timeout": "60s",
+      "description": "Ping a host a fixed number of times. Allowed up to 60s." },
 
     { "path": "/bin/systemctl",      "args": "^restart ntfy$",  "as": ["root"],
       "description": "Restart the ntfy systemd unit." },
@@ -117,8 +117,9 @@ Top-level fields:
 | `name`         | `"rrsh"`    | Reported in MCP `serverInfo.name`. Useful for identifying which host Claude is connected to.                  |
 | `instructions` | empty       | Returned in MCP `initialize.instructions` — the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
 | `sudo`         | `false`     | Master switch for elevation. When `false`, every `run_command` whose target user differs from the SSH user is denied, and the privileged `rrsh sudo` subcommand refuses to run — even if `/etc/sudoers.d/rrsh` is in place. Must be `true` to use any rule whose `as:` list includes a non-self user. |
-| `timeout`      | `"10s"`     | Global command timeout, applied unless a rule sets its own.                                                   |
 | `commands`     | required    | Array of allowlist rules.                                                                                     |
+
+There is no top-level `timeout`. Every command runs with a fixed 30-second deadline unless its rule sets its own `timeout`. Letting operators raise the global timeout would silently let runaway commands hold the JSON-RPC channel hostage; per-rule overrides preserve that guardrail while letting genuinely long-running diagnostics (e.g. `ping -c 100 host`) opt out.
 
 Fields on each command entry:
 
@@ -126,7 +127,7 @@ Fields on each command entry:
 | ------------- | ---------------- | -------------------------------------------------------------------------------- |
 | `path`        | required         | Absolute path to the binary.                                                     |
 | `args`        | any args allowed | Regex the joined argument string must match (anchored as written).               |
-| `timeout`     | global timeout   | Per-command timeout, e.g. `"30s"`. Overrides the top-level `timeout`.            |
+| `timeout`     | `"30s"`          | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
 | `as`          | `["self"]`       | Users the command may run as. `self` resolves to the SSH user at runtime.        |
 | `description` | empty            | Free-text shown to Claude via `list_commands`. Treat it like an API doc string. |
 
@@ -221,11 +222,11 @@ The privileged half (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `
 Decisions go to syslog under the `rrsh` tag, facility `auth`:
 
 ```
-Mar  5 21:22:01 host rrsh[12345]: ALLOWED: user=ai cmd=/usr/bin/whoami
-Mar  5 21:22:14 host rrsh[12346]: DENIED: user=ai cmd=/bin/sh
-Mar  5 21:22:30 host rrsh[12347]: ALLOWED: user=ai as=root cmd=/bin/systemctl restart ntfy
-Mar  5 21:22:45 host rrsh[12348]: DENIED: user=ai as=root cmd=/usr/bin/whoami
-Mar  5 21:22:55 host rrsh[12349]: ALLOWED: user=ai cmd=/usr/bin/journalctl -u ntfy -n 1000 | /usr/bin/grep ERROR
+Mar  5 21:22:01 host rrsh[12345]: ALLOWED: user=rrsh cmd=/usr/bin/whoami
+Mar  5 21:22:14 host rrsh[12346]: DENIED: user=rrsh cmd=/bin/sh
+Mar  5 21:22:30 host rrsh[12347]: ALLOWED: user=rrsh as=root cmd=/bin/systemctl restart ntfy
+Mar  5 21:22:45 host rrsh[12348]: DENIED: user=rrsh as=root cmd=/usr/bin/whoami
+Mar  5 21:22:55 host rrsh[12349]: ALLOWED: user=rrsh cmd=/usr/bin/journalctl -u ntfy -n 1000 | /usr/bin/grep ERROR
 ```
 
 The `as=` field is present only when the executing user differs from the SSH user. Pipelines are logged as the space-joined stages separated by ` | `. On Debian/Ubuntu these typically end up in `/var/log/auth.log`; on RHEL-likes in `/var/log/secure`.

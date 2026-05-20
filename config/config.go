@@ -3,7 +3,9 @@
 // Schema:
 //
 //	{
-//	  "timeout": "10s",
+//	  "name":         "ntfy-prod",         // optional, MCP serverInfo.name
+//	  "instructions": "host-specific...",   // optional, MCP initialize.instructions
+//	  "sudo":         false,                // master switch for elevation
 //	  "commands": [
 //	    { "path": "/usr/bin/whoami" },
 //	    { "path": "/usr/bin/ls",     "args": "^-la /var/log/.*$" },
@@ -17,12 +19,15 @@
 //
 //   - path     absolute path to the binary (required)
 //   - args     regex the argument string must match (default: any args allowed)
-//   - timeout  per-command timeout, e.g. "30s" (default: global timeout)
+//   - timeout  per-command timeout, e.g. "30s" (default: DefaultTimeout)
 //   - as       list of users the command may run as (default: ["self"])
 //
 // `self` in an `as` list resolves to the SSH user at runtime. Other entries are
 // real usernames (e.g. "root", "deploy"). Unknown fields are rejected — the
 // parser is strict because it sits on the privileged trust boundary.
+//
+// There is no top-level `timeout` — DefaultTimeout (30s) is the baseline for
+// every command, and individual rules opt out by setting their own `timeout`.
 package config
 
 import (
@@ -35,14 +40,14 @@ import (
 	"time"
 )
 
-// DefaultTimeout is applied when the config omits a top-level `timeout`.
-const DefaultTimeout = 10 * time.Second
-
 // SelfUser is the magic token in `as` lists meaning "the SSH user who invoked
 // rrsh". Resolved at runtime against $SUDO_USER (in the privileged
 // subcommand) or the current user (in the unprivileged process).
 const SelfUser = "self"
 
+// CommandRule is one allowlist entry. It is matched against an incoming
+// (path, argv) pair: Path must equal the absolute binary path, and
+// ArgsPattern (if non-nil) must match the space-joined argv.
 type CommandRule struct {
 	Path        string
 	ArgsPattern *regexp.Regexp
@@ -56,6 +61,8 @@ type CommandRule struct {
 	Description string
 }
 
+// Config is the parsed on-disk allowlist. Top-level fields control
+// server-wide behavior; per-rule fields live on CommandRule.
 type Config struct {
 	// Name overrides the default server name reported in MCP's
 	// serverInfo.name (e.g. "ntfy-prod-1"). Optional. Defaults to "rrsh".
@@ -74,7 +81,6 @@ type Config struct {
 	// sudoers grant, elevation does nothing until the operator
 	// explicitly sets "sudo": true in the config.
 	Sudo     bool
-	Timeout  time.Duration
 	Commands []CommandRule
 }
 
@@ -84,7 +90,6 @@ type rawConfig struct {
 	Name         string    `json:"name"`
 	Instructions string    `json:"instructions"`
 	Sudo         bool      `json:"sudo"`
-	Timeout      string    `json:"timeout"`
 	Commands     []rawRule `json:"commands"`
 }
 
@@ -117,14 +122,6 @@ func Parse(data []byte) (*Config, error) {
 		Name:         raw.Name,
 		Instructions: raw.Instructions,
 		Sudo:         raw.Sudo,
-		Timeout:      DefaultTimeout,
-	}
-	if raw.Timeout != "" {
-		d, err := time.ParseDuration(raw.Timeout)
-		if err != nil {
-			return nil, fmt.Errorf("invalid timeout %q: %w", raw.Timeout, err)
-		}
-		cfg.Timeout = d
 	}
 	for i, r := range raw.Commands {
 		rule, err := convertRule(r)

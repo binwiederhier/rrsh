@@ -21,6 +21,8 @@ type Matcher struct {
 	rules []config.CommandRule
 }
 
+// New returns a Matcher that resolves calls against the given rules in
+// declaration order.
 func New(rules []config.CommandRule) *Matcher {
 	return &Matcher{rules: rules}
 }
@@ -34,21 +36,16 @@ func (m *Matcher) Match(path string, argv []string) (*config.CommandRule, bool) 
 	if !strings.HasPrefix(path, "/") {
 		return nil, false
 	}
-
 	args := strings.Join(argv, " ")
-
 	for i := range m.rules {
 		if m.rules[i].Path != path {
 			continue
-		}
-		if m.rules[i].ArgsPattern == nil {
+		} else if m.rules[i].ArgsPattern == nil {
 			return &m.rules[i], true
-		}
-		if m.rules[i].ArgsPattern.MatchString(args) {
+		} else if m.rules[i].ArgsPattern.MatchString(args) {
 			return &m.rules[i], true
 		}
 		return nil, false
 	}
-
 	return nil, false
 }

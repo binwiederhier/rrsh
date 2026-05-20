@@ -6,15 +6,18 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/logger"
 )
 
-func testServer(in string) (*bytes.Buffer, error) {
+// testServer spins up an mcp.Server backed by a small default allowlist
+// and feeds it the given NDJSON request stream. It returns the captured
+// stdout (the server's response stream) and any transport-level error
+// from Serve. Failures inside the helper itself are reported via t.
+func testServer(t *testing.T, in string) (*bytes.Buffer, error) {
+	t.Helper()
 	cfg := &config.Config{
-		Timeout: 5 * time.Second,
 		Commands: []config.CommandRule{
 			{Path: "/bin/echo", As: []string{config.SelfUser}, Description: "Echo arguments."},
 			{Path: "/bin/cat", As: []string{config.SelfUser}, Description: "Concatenate input."},
@@ -46,8 +49,9 @@ func decodeResponses(t *testing.T, raw string) []map[string]any {
 }
 
 func TestServer_Initialize(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
-	out, err := testServer(in)
+	out, err := testServer(t, in)
 	if err != nil {
 		t.Fatalf("Serve error: %v", err)
 	}
@@ -59,14 +63,15 @@ func TestServer_Initialize(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected result, got: %v", resps[0])
 	}
-	if result["protocolVersion"] != ProtocolVersion {
-		t.Errorf("protocolVersion = %v, want %v", result["protocolVersion"], ProtocolVersion)
+	if result["protocolVersion"] != protocolVersion {
+		t.Errorf("protocolVersion = %v, want %v", result["protocolVersion"], protocolVersion)
 	}
 }
 
 func TestServer_ToolsList(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if len(resps) != 1 {
 		t.Fatalf("got %d responses", len(resps))
@@ -86,8 +91,9 @@ func TestServer_ToolsList(t *testing.T) {
 }
 
 func TestServer_ListCommands(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_commands","arguments":{}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	content := result["content"].([]any)
@@ -101,8 +107,9 @@ func TestServer_ListCommands(t *testing.T) {
 }
 
 func TestServer_RunCommand_Happy(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","hello"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	if isErr, _ := result["isError"].(bool); isErr {
@@ -123,8 +130,9 @@ func TestServer_RunCommand_Happy(t *testing.T) {
 }
 
 func TestServer_RunCommand_Denied(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/rm","-rf","/"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	if isErr, _ := result["isError"].(bool); !isErr {
@@ -133,8 +141,9 @@ func TestServer_RunCommand_Denied(t *testing.T) {
 }
 
 func TestServer_RunCommand_NonAbsolutePathDenied(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["echo","x"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	if isErr, _ := result["isError"].(bool); !isErr {
@@ -143,10 +152,11 @@ func TestServer_RunCommand_NonAbsolutePathDenied(t *testing.T) {
 }
 
 func TestServer_RunCommand_ArgWithSpacesIsLiteral(t *testing.T) {
+	t.Parallel()
 	// "hello world" stays one arg; /bin/echo prints it with the internal
 	// space preserved.
 	in := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","hello world"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	content := result["content"].([]any)
@@ -159,8 +169,9 @@ func TestServer_RunCommand_ArgWithSpacesIsLiteral(t *testing.T) {
 }
 
 func TestServer_RunCommand_Pipeline(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_command","arguments":{"pipeline":[{"argv":["/bin/echo","piped"]},{"argv":["/bin/cat"]}]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	content := result["content"].([]any)
@@ -176,8 +187,9 @@ func TestServer_RunCommand_Pipeline(t *testing.T) {
 }
 
 func TestServer_RunCommand_PipelineWithDeniedStage(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"run_command","arguments":{"pipeline":[{"argv":["/bin/echo","x"]},{"argv":["/bin/rm","-rf","/"]}]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	if isErr, _ := result["isError"].(bool); !isErr {
@@ -188,11 +200,12 @@ func TestServer_RunCommand_PipelineWithDeniedStage(t *testing.T) {
 // Pipe character in an argument value must be passed through as a literal
 // — this is the example the user gave that motivated the JSON-RPC route.
 func TestServer_RunCommand_PipeInsideArgIsLiteral(t *testing.T) {
+	t.Parallel()
 	// argv containing pipe/redirect bytes must be dispatched without
 	// rejection — the bytes are part of the string value, not shell
 	// metacharacters. Use /bin/echo to confirm they survive the round-trip.
 	in := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo"," | > /dev/null"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	content := result["content"].([]any)
@@ -205,8 +218,9 @@ func TestServer_RunCommand_PipeInsideArgIsLiteral(t *testing.T) {
 }
 
 func TestServer_RunCommand_NonZeroExit(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/false"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	// Non-zero exit surfaces isError=true.
@@ -216,8 +230,9 @@ func TestServer_RunCommand_NonZeroExit(t *testing.T) {
 }
 
 func TestServer_MalformedJSON(t *testing.T) {
+	t.Parallel()
 	in := "this is not json\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if len(resps) != 1 {
 		t.Fatalf("got %d responses", len(resps))
@@ -228,21 +243,23 @@ func TestServer_MalformedJSON(t *testing.T) {
 }
 
 func TestServer_UnknownMethod(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":12,"method":"no/such/method"}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	errObj, ok := resps[0]["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected error, got: %v", resps[0])
 	}
-	if int(errObj["code"].(float64)) != ErrMethodNotFound {
-		t.Errorf("code = %v, want %d", errObj["code"], ErrMethodNotFound)
+	if int(errObj["code"].(float64)) != errMethodNotFound {
+		t.Errorf("code = %v, want %d", errObj["code"], errMethodNotFound)
 	}
 }
 
 func TestServer_UnknownTool(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if _, ok := resps[0]["error"].(map[string]any); !ok {
 		t.Errorf("expected error, got: %v", resps[0])
@@ -250,18 +267,20 @@ func TestServer_UnknownTool(t *testing.T) {
 }
 
 func TestServer_Notification_NoResponse(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	if out.Len() != 0 {
 		t.Errorf("expected no response for notification, got: %s", out.String())
 	}
 }
 
 func TestServer_MultipleRequests(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n" +
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","x"]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if len(resps) != 3 {
 		t.Fatalf("got %d responses, want 3", len(resps))
@@ -276,8 +295,9 @@ func TestServer_MultipleRequests(t *testing.T) {
 }
 
 func TestServer_BothArgvAndPipelineRejected(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo"],"pipeline":[{"argv":["/bin/echo"]}]}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	if isErr, _ := result["isError"].(bool); !isErr {
@@ -286,10 +306,10 @@ func TestServer_BothArgvAndPipelineRejected(t *testing.T) {
 }
 
 func TestServer_Initialize_InstructionsAndName(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		Name:         "ntfy-prod-1",
 		Instructions: "You are on the ntfy prod box. Use list_commands to discover what is allowed.",
-		Timeout:      5 * time.Second,
 		Commands: []config.CommandRule{
 			{Path: "/bin/echo", As: []string{config.SelfUser}},
 		},
@@ -312,23 +332,25 @@ func TestServer_Initialize_InstructionsAndName(t *testing.T) {
 }
 
 func TestServer_Initialize_NoInstructionsEmitsNoField(t *testing.T) {
+	t.Parallel()
 	// Default cfg has no Instructions; the JSON response should omit the
 	// field rather than emitting "instructions": "".
 	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	if strings.Contains(out.String(), `"instructions"`) {
 		t.Errorf("instructions field should be omitted when empty, got: %s", out.String())
 	}
 }
 
 func TestServer_RunCommand_OversizedRequestRejected(t *testing.T) {
-	// Build a request larger than MaxRequestBytes — pad with whitespace
+	t.Parallel()
+	// Build a request larger than maxRequestBytes — pad with whitespace
 	// inside a string so the JSON is still well-formed if it were parsed.
-	huge := strings.Repeat("x", MaxRequestBytes+1024)
+	huge := strings.Repeat("x", maxRequestBytes+1024)
 	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","` + huge + `"]}}}` + "\n" +
 		// Follow with a valid request to confirm we resync.
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
-	out, err := testServer(in)
+	out, err := testServer(t, in)
 	if err != nil {
 		t.Fatalf("Serve error: %v", err)
 	}
@@ -347,9 +369,9 @@ func TestServer_RunCommand_OversizedRequestRejected(t *testing.T) {
 }
 
 func TestServer_RunCommand_ElevationDeniedWhenSudoDisabled(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
-		Sudo:    false, // explicit, though it's the default
-		Timeout: 5 * time.Second,
+		Sudo: false, // explicit, though it's the default
 		Commands: []config.CommandRule{
 			{Path: "/bin/echo", As: []string{"root"}, Description: "Echo as root."},
 		},
@@ -372,13 +394,13 @@ func TestServer_RunCommand_ElevationDeniedWhenSudoDisabled(t *testing.T) {
 }
 
 func TestServer_RunCommand_ElevationAllowedWhenSudoEnabled(t *testing.T) {
+	t.Parallel()
 	// We can't actually invoke /usr/bin/sudo in the test environment, but
 	// we can verify the gate passes — the call should reach the executor
 	// (which then fails to exec sudo, which surfaces as a non-zero exit).
 	// The point is: no "elevation disabled" message.
 	cfg := &config.Config{
-		Sudo:    true,
-		Timeout: 1 * time.Second,
+		Sudo: true,
 		Commands: []config.CommandRule{
 			{Path: "/bin/echo", As: []string{"root"}},
 		},
@@ -398,8 +420,9 @@ func TestServer_RunCommand_ElevationAllowedWhenSudoEnabled(t *testing.T) {
 }
 
 func TestServer_RunCommand_Stdin(t *testing.T) {
+	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/cat"],"stdin":"piped in"}}}` + "\n"
-	out, _ := testServer(in)
+	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
 	content := result["content"].([]any)

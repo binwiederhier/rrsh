@@ -11,6 +11,7 @@ import (
 // proxy for what sshd hands us when the client passes `-T` or pipes
 // stdin in.
 func TestIsTerminal_PipeIsNotATerminal(t *testing.T) {
+	t.Parallel()
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
@@ -28,6 +29,7 @@ func TestIsTerminal_PipeIsNotATerminal(t *testing.T) {
 // the rejection-on-TTY logic doesn't trigger when JSON-RPC is being
 // piped or redirected.
 func TestIsTerminal_RegularFileIsNotATerminal(t *testing.T) {
+	t.Parallel()
 	tmp, err := os.CreateTemp("", "rrsh-isterm-*")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
@@ -43,6 +45,7 @@ func TestIsTerminal_RegularFileIsNotATerminal(t *testing.T) {
 // Ensure isTerminal handles a nil-but-typed *os.File safely. Defensive:
 // no caller passes nil today, but this guards a future regression.
 func TestIsTerminal_StatErrorReturnsFalse(t *testing.T) {
+	t.Parallel()
 	// Close a file first, then call. Stat on a closed file returns an
 	// error on most platforms; isTerminal should return false rather
 	// than panic.

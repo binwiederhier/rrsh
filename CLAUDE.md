@@ -13,13 +13,14 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 
 | Directory | Purpose |
 |-----------|---------|
-| `cmd/` | CLI entry point. `cmd/root.go` dispatches; `cmd/run.go` is the JSON-RPC server entry; `cmd/sudo.go` is the privileged half (`rrsh sudo …`). |
+| `cmd/` | CLI entry point. `cmd/root.go` dispatches; `cmd/serve.go` is the JSON-RPC server entry (`runServe`); `cmd/sudo.go` is the privileged half (`runSudo`, invoked as `rrsh sudo …`). |
 | `config/` | JSON config parser. Strict — `DisallowUnknownFields` everywhere. |
 | `matcher/` | (path, argv) → rule lookup. Argv-native, regex on the joined args string. |
-| `executor/` | Runs single commands or native Go pipelines. Captures stdout/stderr into capped buffers. |
-| `mcp/` | MCP server: NDJSON framing, JSON-RPC 2.0 envelope, two-tool API. |
+| `exec/` | Runs single commands or native Go pipelines. `exec/exec.go` holds the `Execer` type and methods; `exec/types.go` holds the package-private consts (`defaultTimeout`, `maxOutputBytes`, `timeoutExitCode`) and exported `Stage`/`Result` types. Captures stdout/stderr via `util.CappedBuffer`. |
+| `mcp/` | MCP server: NDJSON framing, JSON-RPC 2.0 envelope, two-tool API. `mcp/types.go` holds wire types + JSON-RPC error codes; `mcp/server.go` holds the dispatch loop and handlers. |
 | `logger/` | Syslog wrapper for `auth.info`/`auth.warning` ALLOWED/DENIED records. |
-| `pkg/` | Files that the package installs, mirroring their destination paths. `pkg/etc/rrsh/rrsh.json.example`, `pkg/etc/sudoers.d/rrsh`. |
+| `util/` | Tiny stdlib-only helpers shared across packages. `util/util.go` has `CurrentUser` + the `UnknownUser` const; `util/buffer.go` has `CappedBuffer` (used by `exec` for bounded subprocess output). |
+| `pkg/` | Files that the package installs, mirroring their destination paths. `pkg/etc/rrsh/rrsh.json.example`, `pkg/etc/sudoers.d/rrsh`, `pkg/var/lib/rrsh/.hushlogin`. |
 | `scripts/` | dpkg maintainer scripts (`postinst.sh`, `postrm.sh`). |
 | `dist/` | goreleaser output (not committed). |
 
@@ -53,11 +54,12 @@ Two independent knobs gate elevation:
 
 ## MCP spec note
 
-`ProtocolVersion` in `mcp/types.go` is the MCP wire-protocol version (e.g. `"2025-03-26"`), defined by the MCP spec — *not* the rrsh binary version. Clients reject unknown values. Bump this when adopting a newer MCP spec, not on rrsh releases. The binary version lives in `serverInfo.version`, populated by main from goreleaser's ldflags.
+`protocolVersion` in `mcp/types.go` is the MCP wire-protocol version (e.g. `"2025-03-26"`), defined by the MCP spec — *not* the rrsh binary version. Clients reject unknown values. Bump this when adopting a newer MCP spec, not on rrsh releases. The binary version lives in `serverInfo.version`, populated by main from goreleaser's ldflags via `mcp.Version`.
 
 ## Threat model and limits
 
-- **Per-stream output cap**: 10 MiB (executor.MaxOutputBytes); excess silently dropped with `truncated: true`.
-- **Per-request size cap**: 1 MiB (mcp.MaxRequestBytes); oversized lines are drained and rejected with a JSON-RPC parse error so the connection survives.
+- **Per-stream output cap**: 10 MiB (`exec.maxOutputBytes`); excess silently dropped with `truncated: true`.
+- **Per-request size cap**: 1 MiB (`mcp.maxRequestBytes`); oversized lines are drained and rejected with a JSON-RPC parse error so the connection survives.
+- **Per-command timeout**: 30 s (`exec.defaultTimeout`), or whatever the matched rule specifies. There is no top-level config knob.
 - **No concurrency**: requests are serialized per-connection. Streaming output (e.g. `journalctl -f`) is deliberately not supported in v1 — collect-and-return only.
 - **Login-shell only**: no TCP listener, no daemon. Auth is sshd's problem.

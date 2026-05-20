@@ -2,7 +2,6 @@
   "name": "ntfy",
   "instructions": "You are connected to the 'ntfy' host via rrsh, a read-only diagnostic gateway. Call list_commands first — the args_pattern regex on each rule tells you exactly which argv shapes are accepted. Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) — you do NOT need to pass {\"as\": \"root\"} for those. Log readers (tail/head/cat/grep/wc), fail2ban-client, last, and lastb all run as root because the log files and auxiliary databases require it. No write access. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
   "sudo": true,
-  "timeout": "10s",
   "commands": [
     {
       "path": "/usr/bin/whoami",

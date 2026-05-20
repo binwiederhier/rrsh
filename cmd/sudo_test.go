@@ -6,6 +6,7 @@ import (
 )
 
 func TestResolveAllowedUsers(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		allowed []string

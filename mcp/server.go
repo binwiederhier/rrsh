@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/binwiederhier/rrsh/config"
-	"github.com/binwiederhier/rrsh/executor"
+	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
 )
@@ -20,190 +19,19 @@ import (
 // Version is overwritten by main at startup. Default kept for tests.
 var Version = "dev"
 
-// SudoBinary is the path to /usr/bin/sudo used for the elevation re-exec.
-const SudoBinary = "/usr/bin/sudo"
+// sudoBinary is the path to /usr/bin/sudo used for the elevation re-exec.
+const sudoBinary = "/usr/bin/sudo"
 
-// MaxRequestBytes caps the size of a single JSON-RPC request line. A
+// userRoot is sudo's implicit target — when we elevate to root we omit
+// the -u flag rather than passing `-u root`, matching the usual sudo
+// invocation pattern.
+const userRoot = "root"
+
+// maxRequestBytes caps the size of a single JSON-RPC request line. A
 // malicious client could otherwise pipe an unbounded blob and exhaust the
 // process's memory; bufio's ReadBytes grows the buffer to fit. Lines past
 // this cap are dropped and a parse error is returned.
-const MaxRequestBytes = 1 << 20 // 1 MiB
-
-// Server holds the dependencies needed to serve JSON-RPC requests.
-type Server struct {
-	cfg      *config.Config
-	matcher  *matcher.Matcher
-	executor *executor.Executor
-	log      *logger.SyslogLogger
-	self     string // current SSH user
-	rrshBin  string // path to this binary for elevation re-exec
-	in       *bufio.Reader
-	out      io.Writer
-}
-
-// New constructs a Server. `self` is the current SSH user (what "self"
-// resolves to in `as:` lists). `rrshBin` is the path used to re-exec via
-// sudo for elevation.
-func New(cfg *config.Config, log *logger.SyslogLogger, self, rrshBin string, in io.Reader, out io.Writer) *Server {
-	return &Server{
-		cfg:      cfg,
-		matcher:  matcher.New(cfg.Commands),
-		executor: executor.New(cfg.Timeout),
-		log:      log,
-		self:     self,
-		rrshBin:  rrshBin,
-		in:       bufio.NewReaderSize(in, 1<<20),
-		out:      out,
-	}
-}
-
-// Serve runs the read/dispatch/write loop until stdin closes. Errors at
-// the JSON-RPC envelope level are written back as RPC error responses;
-// only an irrecoverable stdin read error stops the loop.
-func (s *Server) Serve() error {
-	enc := json.NewEncoder(s.out)
-	for {
-		line, tooLong, err := s.readLine()
-		atEOF := errors.Is(err, io.EOF)
-		if atEOF && len(line) == 0 {
-			return nil
-		}
-		if err != nil && !atEOF {
-			return err
-		}
-		if tooLong {
-			// Surface as a JSON-RPC error rather than a transport
-			// failure, then keep serving (the offending line is already
-			// discarded by readLine).
-			if encErr := enc.Encode(errResponse(nil, ErrParse, fmt.Sprintf("request exceeds %d-byte limit", MaxRequestBytes))); encErr != nil {
-				return encErr
-			}
-			continue
-		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			if atEOF {
-				return nil
-			}
-			continue
-		}
-		resp := s.handle(line)
-		if resp != nil {
-			if err := enc.Encode(resp); err != nil {
-				return err
-			}
-		}
-		if atEOF {
-			return nil
-		}
-	}
-}
-
-// readLine reads one NDJSON line, capping its length at MaxRequestBytes
-// to prevent OOM from an unbounded client. The tooLong return is set
-// when the cap was hit; in that case the caller should reply with a
-// parse error and the remainder of the offending line (up to the next
-// '\n') is consumed and discarded so the next request is read cleanly.
-func (s *Server) readLine() (line []byte, tooLong bool, err error) {
-	for {
-		fragment, fragErr := s.in.ReadSlice('\n')
-		// ReadSlice returns the buffer's internal slice; copy before
-		// appending so the next read can't clobber what we've kept.
-		line = append(line, fragment...)
-		if errors.Is(fragErr, bufio.ErrBufferFull) {
-			// Partial read; loop until we hit '\n' or io.EOF.
-			if len(line) > MaxRequestBytes {
-				tooLong = true
-				if drainErr := s.discardToNewline(); drainErr != nil && !errors.Is(drainErr, io.EOF) {
-					return nil, true, drainErr
-				}
-				return nil, true, nil
-			}
-			continue
-		}
-		if len(line) > MaxRequestBytes {
-			tooLong = true
-			return nil, true, nil
-		}
-		return line, false, fragErr
-	}
-}
-
-// discardToNewline reads and drops bytes from the buffered reader until
-// a newline (or EOF). Used to resync the framing after rejecting an
-// oversized request line.
-func (s *Server) discardToNewline() error {
-	for {
-		_, err := s.in.ReadSlice('\n')
-		if err == nil {
-			return nil
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		return err
-	}
-}
-
-// handle parses one request and returns a response (or nil for
-// notifications). All parse-time errors get reported as JSON-RPC error
-// responses with a null ID.
-func (s *Server) handle(data []byte) *response {
-	var req request
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		return errResponse(nil, ErrParse, "parse error: "+err.Error())
-	}
-	if req.JSONRPC != "2.0" {
-		return errResponse(req.ID, ErrInvalidRequest, "jsonrpc must be \"2.0\"")
-	}
-	if req.Method == "" {
-		return errResponse(req.ID, ErrInvalidRequest, "method is required")
-	}
-	// Notifications have no ID and never get a reply.
-	isNotification := len(req.ID) == 0
-
-	result, rpcErr := s.dispatch(req.Method, req.Params)
-	if isNotification {
-		return nil
-	}
-	if rpcErr != nil {
-		return &response{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
-	}
-	return &response{JSONRPC: "2.0", ID: req.ID, Result: result}
-}
-
-// dispatch routes a parsed request to its handler.
-func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError) {
-	switch method {
-	case "initialize":
-		return s.handleInitialize(params)
-	case "tools/list":
-		return s.handleToolsList()
-	case "tools/call":
-		return s.handleToolsCall(params)
-	case "notifications/initialized", "notifications/cancelled":
-		// Accepted but no-op.
-		return nil, nil
-	case "ping":
-		return struct{}{}, nil
-	default:
-		return nil, &rpcError{Code: ErrMethodNotFound, Message: "method not found: " + method}
-	}
-}
-
-func (s *Server) handleInitialize(_ json.RawMessage) (any, *rpcError) {
-	name := s.cfg.Name
-	if name == "" {
-		name = "rrsh"
-	}
-	return initializeResult{
-		ProtocolVersion: ProtocolVersion,
-		Capabilities:    serverCapabilities{Tools: &toolsCapability{}},
-		ServerInfo:      serverInfo{Name: name, Version: Version},
-		Instructions:    s.cfg.Instructions,
-	}, nil
-}
+const maxRequestBytes = 1 << 20 // 1 MiB
 
 // listCommandsSchema is the JSON Schema for the list_commands tool's
 // input (no arguments).
@@ -243,8 +71,190 @@ var runCommandSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// Server holds the dependencies needed to serve JSON-RPC requests.
+type Server struct {
+	cfg      *config.Config
+	matcher  *matcher.Matcher
+	execer *exec.Execer
+	log      *logger.SyslogLogger
+	self     string // current SSH user
+	rrshBin  string // path to this binary for elevation re-exec
+	in       *bufio.Reader
+	out      io.Writer
+}
+
+// New constructs a Server. `self` is the current SSH user (what "self"
+// resolves to in `as:` lists). `rrshBin` is the path used to re-exec via
+// sudo for elevation.
+func New(cfg *config.Config, log *logger.SyslogLogger, self, rrshBin string, in io.Reader, out io.Writer) *Server {
+	return &Server{
+		cfg:      cfg,
+		matcher:  matcher.New(cfg.Commands),
+		execer: exec.New(),
+		log:      log,
+		self:     self,
+		rrshBin:  rrshBin,
+		in:       bufio.NewReaderSize(in, 1<<20),
+		out:      out,
+	}
+}
+
+// Serve runs the read/dispatch/write loop until stdin closes. Errors at
+// the JSON-RPC envelope level are written back as RPC error responses;
+// only an irrecoverable stdin read error stops the loop.
+func (s *Server) Serve() error {
+	enc := json.NewEncoder(s.out)
+	for {
+		line, tooLong, err := s.readLine()
+		atEOF := errors.Is(err, io.EOF)
+		if atEOF && len(line) == 0 {
+			return nil
+		}
+		if err != nil && !atEOF {
+			return err
+		}
+		if tooLong {
+			// Surface as a JSON-RPC error rather than a transport
+			// failure, then keep serving (the offending line is already
+			// discarded by readLine).
+			tooLongResp := errResponse(nil, errParse, fmt.Sprintf("request exceeds %d-byte limit", maxRequestBytes))
+			if err := enc.Encode(tooLongResp); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			if atEOF {
+				return nil
+			}
+			continue
+		}
+		resp := s.handle(line)
+		if resp != nil {
+			if err := enc.Encode(resp); err != nil {
+				return err
+			}
+		}
+		if atEOF {
+			return nil
+		}
+	}
+}
+
+// readLine reads one NDJSON line, capping its length at maxRequestBytes
+// to prevent OOM from an unbounded client. The tooLong return is set
+// when the cap was hit; in that case the caller should reply with a
+// parse error and the remainder of the offending line (up to the next
+// '\n') is consumed and discarded so the next request is read cleanly.
+func (s *Server) readLine() (line []byte, tooLong bool, err error) {
+	for {
+		fragment, fragErr := s.in.ReadSlice('\n')
+		// ReadSlice returns the buffer's internal slice; copy before
+		// appending so the next read can't clobber what we've kept.
+		line = append(line, fragment...)
+		if errors.Is(fragErr, bufio.ErrBufferFull) {
+			// Partial read; loop until we hit '\n' or io.EOF.
+			if len(line) > maxRequestBytes {
+				tooLong = true
+				if drainErr := s.discardToNewline(); drainErr != nil && !errors.Is(drainErr, io.EOF) {
+					return nil, true, drainErr
+				}
+				return nil, true, nil
+			}
+			continue
+		}
+		if len(line) > maxRequestBytes {
+			tooLong = true
+			return nil, true, nil
+		}
+		return line, false, fragErr
+	}
+}
+
+// discardToNewline reads and drops bytes from the buffered reader until
+// a newline (or EOF). Used to resync the framing after rejecting an
+// oversized request line.
+func (s *Server) discardToNewline() error {
+	for {
+		_, err := s.in.ReadSlice('\n')
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return err
+	}
+}
+
+// handle parses one request and returns a response (or nil for
+// notifications). All parse-time errors get reported as JSON-RPC error
+// responses with a null ID.
+func (s *Server) handle(data []byte) *response {
+	var req request
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return errResponse(nil, errParse, "parse error: "+err.Error())
+	}
+	if req.JSONRPC != "2.0" {
+		return errResponse(req.ID, errInvalidRequest, "jsonrpc must be \"2.0\"")
+	}
+	if req.Method == "" {
+		return errResponse(req.ID, errInvalidRequest, "method is required")
+	}
+	// Notifications have no ID and never get a reply.
+	isNotification := len(req.ID) == 0
+
+	result, rpcErr := s.dispatch(req.Method, req.Params)
+	if isNotification {
+		return nil
+	}
+	if rpcErr != nil {
+		return &response{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
+	}
+	return &response{JSONRPC: "2.0", ID: req.ID, Result: result}
+}
+
+// dispatch routes a parsed request to its handler.
+func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError) {
+	switch method {
+	case "initialize":
+		return s.handleInitialize(params)
+	case "tools/list":
+		return s.handleToolsList()
+	case "tools/call":
+		return s.handleToolsCall(params)
+	case "notifications/initialized", "notifications/cancelled":
+		// Accepted but no-op.
+		return nil, nil
+	case "ping":
+		return struct{}{}, nil
+	default:
+		return nil, &rpcError{Code: errMethodNotFound, Message: "method not found: " + method}
+	}
+}
+
+// handleInitialize responds to the MCP `initialize` handshake. The
+// returned protocol version is fixed (see protocolVersion); the server
+// name and instructions text are taken from the config.
+func (s *Server) handleInitialize(_ json.RawMessage) (any, *rpcError) {
+	name := s.cfg.Name
+	if name == "" {
+		name = "rrsh"
+	}
+	return &initializeResult{
+		ProtocolVersion: protocolVersion,
+		Capabilities:    serverCapabilities{Tools: &toolsCapability{}},
+		ServerInfo:      serverInfo{Name: name, Version: Version},
+		Instructions:    s.cfg.Instructions,
+	}, nil
+}
+
+// handleToolsList returns the static tool registry. Both schemas live at
+// the top of the file as package-level vars.
 func (s *Server) handleToolsList() (any, *rpcError) {
-	return toolsListResult{
+	return &toolsListResult{
 		Tools: []toolDef{
 			{
 				Name:        "list_commands",
@@ -260,12 +270,15 @@ func (s *Server) handleToolsList() (any, *rpcError) {
 	}, nil
 }
 
+// handleToolsCall routes a parsed `tools/call` request to the matching
+// tool implementation. Returns an InvalidParams error when the tool
+// name is unknown or the params envelope is malformed.
 func (s *Server) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	var p toolsCallParams
 	dec := json.NewDecoder(bytes.NewReader(params))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
-		return nil, &rpcError{Code: ErrInvalidParams, Message: "invalid tools/call params: " + err.Error()}
+		return nil, &rpcError{Code: errInvalidParams, Message: "invalid tools/call params: " + err.Error()}
 	}
 	switch p.Name {
 	case "list_commands":
@@ -273,10 +286,13 @@ func (s *Server) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	case "run_command":
 		return s.toolRunCommand(p.Arguments)
 	default:
-		return nil, &rpcError{Code: ErrInvalidParams, Message: "unknown tool: " + p.Name}
+		return nil, &rpcError{Code: errInvalidParams, Message: "unknown tool: " + p.Name}
 	}
 }
 
+// toolListCommands implements the `list_commands` MCP tool. It marshals
+// the configured allowlist into a structured JSON document inside one
+// text content block so AI consumers can introspect what is permitted.
 func (s *Server) toolListCommands() (any, *rpcError) {
 	out := make([]commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
@@ -295,20 +311,25 @@ func (s *Server) toolListCommands() (any, *rpcError) {
 	}
 	jsonText, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
-		return nil, &rpcError{Code: ErrInternal, Message: err.Error()}
+		return nil, &rpcError{Code: errInternal, Message: err.Error()}
 	}
-	return toolsCallResult{Content: []contentBlock{{Type: "text", Text: string(jsonText)}}}, nil
+	return &toolsCallResult{Content: []contentBlock{{Type: "text", Text: string(jsonText)}}}, nil
 }
 
+// toolRunCommand implements the `run_command` MCP tool. The arguments
+// must specify exactly one of `argv` (single command) or `pipeline`
+// (multi-stage). Validation errors and matcher denials surface as
+// `isError: true` content rather than transport-level RPC errors so
+// the AI can iterate without giving up the session.
 func (s *Server) toolRunCommand(args json.RawMessage) (any, *rpcError) {
 	if len(args) == 0 {
-		return nil, &rpcError{Code: ErrInvalidParams, Message: "run_command requires arguments"}
+		return nil, &rpcError{Code: errInvalidParams, Message: "run_command requires arguments"}
 	}
 	var a runCommandArgs
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&a); err != nil {
-		return nil, &rpcError{Code: ErrInvalidParams, Message: "invalid run_command arguments: " + err.Error()}
+		return nil, &rpcError{Code: errInvalidParams, Message: "invalid run_command arguments: " + err.Error()}
 	}
 	hasArgv := len(a.Argv) > 0
 	hasPipeline := len(a.Pipeline) > 0
@@ -353,7 +374,7 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 	input := joinForLog(path, argv)
 	if target == s.self {
 		s.log.Allowed(input, s.self)
-		res := s.executor.Execute(path, argv, rule, stdin)
+		res := s.execer.Execute(path, argv, rule, stdin)
 		return runResultToTool(res), nil
 	}
 
@@ -373,7 +394,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		return s.deny("top-level `as` is not valid with pipeline — set `as` per stage", ""), nil
 	}
 
-	stages := make([]executor.Stage, 0, len(a.Pipeline))
+	stages := make([]exec.Stage, 0, len(a.Pipeline))
 	for i, step := range a.Pipeline {
 		if len(step.Argv) == 0 {
 			return s.deny(fmt.Sprintf("pipeline stage %d has empty argv", i), ""), nil
@@ -415,7 +436,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 			stageStdin = strings.NewReader(a.Stdin)
 		}
 
-		stages = append(stages, executor.Stage{
+		stages = append(stages, exec.Stage{
 			Path:  path,
 			Argv:  argv,
 			Rule:  rule,
@@ -424,7 +445,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 	}
 
 	s.log.Allowed(s.fullPipelineLog(a.Pipeline), s.self)
-	res := s.executor.ExecutePipeline(stages)
+	res := s.execer.ExecutePipeline(stages)
 	return runResultToTool(res), nil
 }
 
@@ -432,31 +453,31 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 // command as `target`. The privileged half (cmd/sudo.go) reads its argv
 // directly from os.Args, re-loads config from disk, and re-validates the
 // rule's `as:` list before executing.
-func (s *Server) elevateAndExecute(target, path string, argv []string, rule *config.CommandRule, stdin io.Reader) executor.Result {
+func (s *Server) elevateAndExecute(target, path string, argv []string, rule *config.CommandRule, stdin io.Reader) *exec.Result {
 	sudoPath, sudoArgv := s.buildElevatedArgv(target, path, argv)
 	// Pretend the elevation is just another command — same executor
 	// semantics, same timeout.
-	return s.executor.Execute(sudoPath, sudoArgv, rule, stdin)
+	return s.execer.Execute(sudoPath, sudoArgv, rule, stdin)
 }
 
-// buildElevatedArgv produces (path, argv) suitable for executor.Execute
-// to spawn /usr/bin/sudo and re-enter rrsh's privileged half.
+// buildElevatedArgv produces (path, argv) suitable for exec.Execute to
+// spawn /usr/bin/sudo and re-enter rrsh's privileged half.
 //
 //	sudo -n [-u TARGET] /usr/bin/rrsh sudo <path> <argv...>
 //
 // -u is omitted when target == "root" (sudo defaults to root).
 func (s *Server) buildElevatedArgv(target, path string, argv []string) (string, []string) {
 	out := []string{"-n"}
-	if target != "root" {
+	if target != userRoot {
 		out = append(out, "-u", target)
 	}
 	out = append(out, s.rrshBin, "sudo", path)
 	out = append(out, argv...)
-	return SudoBinary, out
+	return sudoBinary, out
 }
 
-// runResultToTool wraps an executor.Result into the MCP tool response.
-func runResultToTool(res executor.Result) toolsCallResult {
+// runResultToTool wraps an exec.Result into the MCP tool response.
+func runResultToTool(res *exec.Result) *toolsCallResult {
 	payload := runCommandOutput{
 		Stdout:    safeUTF8(res.Stdout),
 		Stderr:    safeUTF8(res.Stderr),
@@ -466,12 +487,12 @@ func runResultToTool(res executor.Result) toolsCallResult {
 	}
 	text, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return toolsCallResult{
+		return &toolsCallResult{
 			Content: []contentBlock{{Type: "text", Text: "rrsh: internal: " + err.Error()}},
 			IsError: true,
 		}
 	}
-	return toolsCallResult{
+	return &toolsCallResult{
 		Content: []contentBlock{{Type: "text", Text: string(text)}},
 		IsError: res.ExitCode != 0,
 	}
@@ -479,11 +500,11 @@ func runResultToTool(res executor.Result) toolsCallResult {
 
 // deny constructs an error result for a denied call. msg is the
 // human-readable reason; detail is appended if non-empty.
-func (s *Server) deny(msg, detail string) toolsCallResult {
+func (s *Server) deny(msg, detail string) *toolsCallResult {
 	if detail != "" {
 		msg += ": " + detail
 	}
-	return toolsCallResult{
+	return &toolsCallResult{
 		Content: []contentBlock{{Type: "text", Text: "rrsh: " + msg}},
 		IsError: true,
 	}
@@ -574,13 +595,3 @@ func displayTarget(requested, self string) string {
 	return requested
 }
 
-// SelfBinary returns the absolute path to the running rrsh executable.
-// Falls back to "/usr/bin/rrsh" if os.Executable fails (shouldn't happen
-// in practice on Linux).
-func SelfBinary() string {
-	p, err := os.Executable()
-	if err != nil {
-		return "/usr/bin/rrsh"
-	}
-	return p
-}

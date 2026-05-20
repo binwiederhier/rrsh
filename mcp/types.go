@@ -1,6 +1,6 @@
 // Package mcp implements a minimal MCP-compatible JSON-RPC 2.0 server over
 // stdio for rrsh. It exposes two tools — list_commands and run_command —
-// backed by the existing matcher/executor packages.
+// backed by the existing matcher/exec packages.
 //
 // The protocol surface is intentionally tiny: initialize, tools/list,
 // tools/call. No notifications, no resources, no prompts. The trust
@@ -10,7 +10,7 @@ package mcp
 
 import "encoding/json"
 
-// ProtocolVersion is the MCP wire protocol version this server speaks.
+// protocolVersion is the MCP wire protocol version this server speaks.
 //
 // This is *not* the rrsh binary version (that's `serverInfo.version`,
 // populated from main's ldflags). The MCP spec defines a fixed set of
@@ -20,15 +20,15 @@ import "encoding/json"
 // client reject the handshake.
 //
 // Bump this when adopting a newer MCP spec, not when releasing rrsh.
-const ProtocolVersion = "2025-03-26"
+const protocolVersion = "2025-03-26"
 
 // JSON-RPC 2.0 error codes (subset).
 const (
-	ErrParse          = -32700
-	ErrInvalidRequest = -32600
-	ErrMethodNotFound = -32601
-	ErrInvalidParams  = -32602
-	ErrInternal       = -32603
+	errParse          = -32700
+	errInvalidRequest = -32600
+	errMethodNotFound = -32601
+	errInvalidParams  = -32602
+	errInternal       = -32603
 )
 
 // request is one JSON-RPC 2.0 request. ID is left as RawMessage so we can

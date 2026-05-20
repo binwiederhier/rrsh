@@ -7,7 +7,8 @@ import (
 	"github.com/binwiederhier/rrsh/config"
 )
 
-func testMatcher() *Matcher {
+func testMatcher(t *testing.T) *Matcher {
+	t.Helper()
 	return New([]config.CommandRule{
 		{Path: "/usr/bin/whoami"},
 		{Path: "/usr/bin/ls", ArgsPattern: regexp.MustCompile(`^-la /var/log/.*$`)},
@@ -18,42 +19,48 @@ func testMatcher() *Matcher {
 }
 
 func TestMatch_AllowedNoArgs(t *testing.T) {
-	rule, ok := testMatcher().Match("/usr/bin/whoami", nil)
+	t.Parallel()
+	rule, ok := testMatcher(t).Match("/usr/bin/whoami", nil)
 	if !ok || rule.Path != "/usr/bin/whoami" {
 		t.Error("whoami should be allowed")
 	}
 }
 
 func TestMatch_AllowedWithArgs(t *testing.T) {
-	rule, ok := testMatcher().Match("/usr/bin/ls", []string{"-la", "/var/log/syslog"})
+	t.Parallel()
+	rule, ok := testMatcher(t).Match("/usr/bin/ls", []string{"-la", "/var/log/syslog"})
 	if !ok || rule.Path != "/usr/bin/ls" {
 		t.Error("ls -la /var/log/syslog should be allowed")
 	}
 }
 
 func TestMatch_AllowedNoRestrictionWithArgs(t *testing.T) {
-	_, ok := testMatcher().Match("/usr/bin/df", []string{"-h"})
+	t.Parallel()
+	_, ok := testMatcher(t).Match("/usr/bin/df", []string{"-h"})
 	if !ok {
 		t.Error("df -h should be allowed (no args restriction)")
 	}
 }
 
 func TestMatch_DeniedWrongArgs(t *testing.T) {
-	_, ok := testMatcher().Match("/usr/bin/ls", []string{"-la", "/etc/passwd"})
+	t.Parallel()
+	_, ok := testMatcher(t).Match("/usr/bin/ls", []string{"-la", "/etc/passwd"})
 	if ok {
 		t.Error("ls -la /etc/passwd should be denied")
 	}
 }
 
 func TestMatch_DeniedUnknownCommand(t *testing.T) {
-	_, ok := testMatcher().Match("/usr/bin/rm", []string{"-rf", "/"})
+	t.Parallel()
+	_, ok := testMatcher(t).Match("/usr/bin/rm", []string{"-rf", "/"})
 	if ok {
 		t.Error("rm should be denied")
 	}
 }
 
 func TestMatch_DeniedRelativePath(t *testing.T) {
-	_, ok := testMatcher().Match("whoami", nil)
+	t.Parallel()
+	_, ok := testMatcher(t).Match("whoami", nil)
 	if ok {
 		t.Error("relative path should be denied")
 	}
@@ -63,7 +70,8 @@ func TestMatch_DeniedRelativePath(t *testing.T) {
 // argv arrives as a slice, so a "|" or ";" inside an element is just a
 // byte. Only the rule's regex decides whether the value is allowed.
 func TestMatch_MetacharsInArgvElementAreLiteralBytes(t *testing.T) {
-	m := testMatcher()
+	t.Parallel()
+	m := testMatcher(t)
 
 	// /usr/bin/grep has no ArgsPattern, so any single string arg is allowed
 	// including one containing pipe / redirect characters.
@@ -73,7 +81,8 @@ func TestMatch_MetacharsInArgvElementAreLiteralBytes(t *testing.T) {
 }
 
 func TestMatch_ArgsRegex(t *testing.T) {
-	m := testMatcher()
+	t.Parallel()
+	m := testMatcher(t)
 
 	if _, ok := m.Match("/usr/bin/ps", []string{"aux"}); !ok {
 		t.Error("ps aux should be allowed")
@@ -89,7 +98,8 @@ func TestMatch_ArgsRegex(t *testing.T) {
 }
 
 func TestMatch_EmptyPath(t *testing.T) {
-	if _, ok := testMatcher().Match("", nil); ok {
+	t.Parallel()
+	if _, ok := testMatcher(t).Match("", nil); ok {
 		t.Error("empty path should not match")
 	}
 }

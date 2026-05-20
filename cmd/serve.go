@@ -8,6 +8,7 @@ import (
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/mcp"
+	"github.com/binwiederhier/rrsh/util"
 )
 
 // runServe is the default code path. rrsh exposes a JSON-RPC server over
@@ -44,16 +45,7 @@ func runServe(args []string) {
 		return
 	}
 
-	if *commandFlag != "" || fs.NArg() > 0 {
-		printShellModeRejection(os.Stderr)
-		os.Exit(exitGeneric)
-	}
-
-	// Interactive humans (TTY on stdin) get the same self-documenting
-	// rejection. Without this check, an `ssh user@host` with no command,
-	// or a local `su user`, drops into a JSON-RPC loop that silently
-	// rejects every line typed — looks like a hang.
-	if isTerminal(os.Stdin) {
+	if *commandFlag != "" || fs.NArg() > 0 || isTerminal(os.Stdin) {
 		printShellModeRejection(os.Stderr)
 		os.Exit(exitGeneric)
 	}
@@ -67,7 +59,13 @@ func runServe(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	srv := mcp.New(cfg, log, currentUsername(), mcp.SelfBinary(), os.Stdin, os.Stdout)
+	rrshBin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rrsh: cannot resolve own executable path: %v\n", err)
+		os.Exit(exitGeneric)
+	}
+
+	srv := mcp.New(cfg, log, util.CurrentUser(), rrshBin, os.Stdin, os.Stdout)
 	if err := srv.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
@@ -109,12 +107,12 @@ guidance — read it first.
 // back to a generic placeholder. The goal is to make the example
 // copy-pastable for the caller who just hit the error.
 func sshTargetHint() string {
-	user := currentUsername()
+	user := util.CurrentUser()
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		host = "<host>"
 	}
-	if user == "" || user == "unknown" {
+	if user == "" || user == util.UnknownUser {
 		user = "<user>"
 	}
 	return user + "@" + host
