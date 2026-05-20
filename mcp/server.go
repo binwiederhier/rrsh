@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,8 +20,14 @@ import (
 // Version is overwritten by main at startup. Default kept for tests.
 var Version = "dev"
 
-// SudoBinary is the path to /usr/bin/sudo. Indirection for tests.
-var SudoBinary = "/usr/bin/sudo"
+// SudoBinary is the path to /usr/bin/sudo used for the elevation re-exec.
+const SudoBinary = "/usr/bin/sudo"
+
+// MaxRequestBytes caps the size of a single JSON-RPC request line. A
+// malicious client could otherwise pipe an unbounded blob and exhaust the
+// process's memory; bufio's ReadBytes grows the buffer to fit. Lines past
+// this cap are dropped and a parse error is returned.
+const MaxRequestBytes = 1 << 20 // 1 MiB
 
 // Server holds the dependencies needed to serve JSON-RPC requests.
 type Server struct {
@@ -56,35 +63,85 @@ func New(cfg *config.Config, log *logger.SyslogLogger, self, rrshBin string, in 
 func (s *Server) Serve() error {
 	enc := json.NewEncoder(s.out)
 	for {
-		line, err := s.readLine()
-		if err == io.EOF {
+		line, tooLong, err := s.readLine()
+		atEOF := errors.Is(err, io.EOF)
+		if atEOF && len(line) == 0 {
 			return nil
 		}
-		if err != nil {
+		if err != nil && !atEOF {
 			return err
 		}
+		if tooLong {
+			// Surface as a JSON-RPC error rather than a transport
+			// failure, then keep serving (the offending line is already
+			// discarded by readLine).
+			if encErr := enc.Encode(errResponse(nil, ErrParse, fmt.Sprintf("request exceeds %d-byte limit", MaxRequestBytes))); encErr != nil {
+				return encErr
+			}
+			continue
+		}
 		if len(bytes.TrimSpace(line)) == 0 {
+			if atEOF {
+				return nil
+			}
 			continue
 		}
 		resp := s.handle(line)
-		if resp == nil {
-			// Notification (no ID) — by spec we do not respond.
-			continue
+		if resp != nil {
+			if err := enc.Encode(resp); err != nil {
+				return err
+			}
 		}
-		if err := enc.Encode(resp); err != nil {
-			return err
+		if atEOF {
+			return nil
 		}
 	}
 }
 
-// readLine reads one NDJSON line. A single request may be up to 1 MB; we
-// reuse the underlying reader's buffer.
-func (s *Server) readLine() ([]byte, error) {
-	line, err := s.in.ReadBytes('\n')
-	if err == io.EOF && len(line) > 0 {
-		return line, nil
+// readLine reads one NDJSON line, capping its length at MaxRequestBytes
+// to prevent OOM from an unbounded client. The tooLong return is set
+// when the cap was hit; in that case the caller should reply with a
+// parse error and the remainder of the offending line (up to the next
+// '\n') is consumed and discarded so the next request is read cleanly.
+func (s *Server) readLine() (line []byte, tooLong bool, err error) {
+	for {
+		fragment, fragErr := s.in.ReadSlice('\n')
+		// ReadSlice returns the buffer's internal slice; copy before
+		// appending so the next read can't clobber what we've kept.
+		line = append(line, fragment...)
+		if errors.Is(fragErr, bufio.ErrBufferFull) {
+			// Partial read; loop until we hit '\n' or io.EOF.
+			if len(line) > MaxRequestBytes {
+				tooLong = true
+				if drainErr := s.discardToNewline(); drainErr != nil && !errors.Is(drainErr, io.EOF) {
+					return nil, true, drainErr
+				}
+				return nil, true, nil
+			}
+			continue
+		}
+		if len(line) > MaxRequestBytes {
+			tooLong = true
+			return nil, true, nil
+		}
+		return line, false, fragErr
 	}
-	return line, err
+}
+
+// discardToNewline reads and drops bytes from the buffered reader until
+// a newline (or EOF). Used to resync the framing after rejecting an
+// oversized request line.
+func (s *Server) discardToNewline() error {
+	for {
+		_, err := s.in.ReadSlice('\n')
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return err
+	}
 }
 
 // handle parses one request and returns a response (or nil for
@@ -148,9 +205,9 @@ func (s *Server) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 	}, nil
 }
 
-// listAllowlistSchema is the JSON Schema for the list_commands tool's
+// listCommandsSchema is the JSON Schema for the list_commands tool's
 // input (no arguments).
-var listAllowlistSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
+var listCommandsSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
 // runCommandSchema is the JSON Schema for the run_command tool's input.
 var runCommandSchema = json.RawMessage(`{
@@ -192,11 +249,11 @@ func (s *Server) handleToolsList() (any, *rpcError) {
 			{
 				Name:        "list_commands",
 				Description: "List every command rule this rrsh instance will allow. Returns a JSON array of {path, args_pattern, as, description, timeout_seconds}. Call this first to discover what run_command can execute.",
-				InputSchema: listAllowlistSchema,
+				InputSchema: listCommandsSchema,
 			},
 			{
 				Name:        "run_command",
-				Description: "Execute one allowlisted command, or a pipeline of them. Pass argv as a string array (the first element is the absolute path); a regex on the rule decides whether the arguments are accepted. Returns structured {stdout, stderr, exit, timed_out, truncated}.",
+				Description: "Execute one allowlisted command, or chain several with a native pipeline (no shell involved). Pass `argv` as a string array (first element = absolute path), or pass `pipeline` as an array of {argv, as?} stages — stdout of stage N feeds stdin of stage N+1. Example pipeline: `[{\"argv\":[\"/usr/bin/cat\",\"/var/log/syslog\"]},{\"argv\":[\"/usr/bin/grep\",\"-i\",\"error\",\"/dev/stdin\"]}]`. Each rule's args_pattern regex decides whether the arguments are accepted. Returns structured {stdout, stderr, exit, timed_out, truncated}.",
 				InputSchema: runCommandSchema,
 			},
 		},
@@ -221,9 +278,9 @@ func (s *Server) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 }
 
 func (s *Server) toolListCommands() (any, *rpcError) {
-	out := make([]allowlistEntry, 0, len(s.cfg.Commands))
+	out := make([]commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
-		entry := allowlistEntry{
+		entry := commandEntry{
 			Path:        r.Path,
 			As:          r.As,
 			Description: r.Description,
@@ -300,6 +357,11 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 		return runResultToTool(res), nil
 	}
 
+	if !s.cfg.Sudo {
+		s.log.Denied(input, s.self)
+		return s.deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)", ""), nil
+	}
+
 	s.log.Allowed(input, target)
 	res := s.elevateAndExecute(target, path, argv, rule, stdin)
 	return runResultToTool(res), nil
@@ -341,6 +403,10 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		// /usr/bin/sudo … rrsh sudo <path> <argv>. The privileged half
 		// re-validates from disk against the same rule's `as:` list.
 		if target != s.self {
+			if !s.cfg.Sudo {
+				s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
+				return s.deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)", ""), nil
+			}
 			path, argv = s.buildElevatedArgv(target, path, argv)
 		}
 

@@ -180,6 +180,34 @@ func TestExecutePipeline_SingleStageEquivalentToExecute(t *testing.T) {
 	}
 }
 
+// Verifies that Execute itself enforces the per-stream cap when a real
+// child produces too much output. We can't easily exhaust 10 MB in a unit
+// test without slowness; instead we shrink the buffer by writing a small
+// program that produces a known amount and use a smaller in-test cap via
+// the cappedBuffer constant tested elsewhere. Here we just verify the
+// flag plumbing: cat a moderate input that exceeds an injected cap.
+//
+// Implementation note: MaxOutputBytes is a package constant so we can't
+// override it cheaply per-test. We exercise this with a child that
+// produces >MaxOutputBytes only if we're willing to allocate that much
+// in the test — skipped to keep the test suite fast. The cappedBuffer
+// unit test (TestExecute_Truncation below) covers the algorithm.
+func TestExecute_LargeOutputFits(t *testing.T) {
+	// 1 MiB of zeros from /dev/zero, capped via head to keep memory bounded.
+	// We just verify the executor doesn't choke on moderate output.
+	rule := &config.CommandRule{Path: "/usr/bin/head"}
+	res := New(10 * time.Second).Execute("/usr/bin/head", []string{"-c", "1048576", "/dev/zero"}, rule, nil)
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d", res.ExitCode)
+	}
+	if len(res.Stdout) != 1024*1024 {
+		t.Errorf("stdout length = %d, want %d", len(res.Stdout), 1024*1024)
+	}
+	if res.Truncated {
+		t.Errorf("Truncated should be false for output under the cap")
+	}
+}
+
 func TestExecute_Truncation(t *testing.T) {
 	// Use yes piped through head — but ExecutePipeline isn't ready for
 	// large output, so use a small limit by running yes for a tiny timeout

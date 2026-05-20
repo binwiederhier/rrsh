@@ -12,7 +12,7 @@ import (
 	"github.com/binwiederhier/rrsh/matcher"
 )
 
-// sudoMain is the privileged half of rrsh's elevation flow. It is invoked
+// runSudo is the privileged half of rrsh's elevation flow. It is invoked
 // by the unprivileged rrsh process as:
 //
 //	/usr/bin/sudo [-u USER] /usr/bin/rrsh sudo <path> <argv...>
@@ -27,7 +27,7 @@ import (
 //
 // Argv arrives directly via os.Args (passed through by sudo without
 // reinterpretation), so no shell-string parsing happens here either.
-func sudoMain(args []string) {
+func runSudo(args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "rrsh: sudo: missing command")
 		os.Exit(exitDenied)
@@ -42,6 +42,16 @@ func sudoMain(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
+	}
+
+	// Defense-in-depth: even though sudoers grants `rrsh ALL=(root)
+	// NOPASSWD: /usr/bin/rrsh sudo *`, the operator must explicitly opt in
+	// via the config. Without "sudo": true, the privileged half refuses to
+	// run anything — closes the door on accidental elevation immediately
+	// after package install.
+	if !cfg.Sudo {
+		fmt.Fprintln(os.Stderr, "rrsh: elevation disabled (set \"sudo\": true in "+defaultConfigPath+")")
+		os.Exit(exitDenied)
 	}
 
 	path := args[0]
@@ -107,4 +117,23 @@ func joinForLog(path string, argv []string) string {
 		return path
 	}
 	return path + " " + strings.Join(argv, " ")
+}
+
+// resolveAllowedUsers replaces every "self" token in the rule's as: list
+// with the actual SSH username, leaving real usernames untouched.
+//
+// Mirrors the equivalent function in mcp/server.go; intentionally
+// duplicated to keep the privileged half's dependency surface minimal —
+// adding an import of mcp here would pull the JSON-RPC server into the
+// root trust boundary for no benefit.
+func resolveAllowedUsers(allowed []string, self string) []string {
+	out := make([]string, 0, len(allowed))
+	for _, u := range allowed {
+		if u == config.SelfUser {
+			out = append(out, self)
+		} else {
+			out = append(out, u)
+		}
+	}
+	return out
 }

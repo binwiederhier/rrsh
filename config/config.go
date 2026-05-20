@@ -66,8 +66,16 @@ type Config struct {
 	// fetches this on first contact, so it can replace the need for a
 	// per-host system prompt. Optional.
 	Instructions string
-	Timeout      time.Duration
-	Commands     []CommandRule
+	// Sudo, when false (the default), disables every elevation path.
+	// The `rrsh sudo` privileged subcommand refuses to run, and the
+	// MCP server denies any run_command call whose resolved target
+	// differs from the SSH user. This is the second line of defense
+	// alongside the sudoers file: even if the .deb installs the
+	// sudoers grant, elevation does nothing until the operator
+	// explicitly sets "sudo": true in the config.
+	Sudo     bool
+	Timeout  time.Duration
+	Commands []CommandRule
 }
 
 // rawConfig mirrors the on-disk JSON shape. Strings for timeout/args keep the
@@ -75,6 +83,7 @@ type Config struct {
 type rawConfig struct {
 	Name         string    `json:"name"`
 	Instructions string    `json:"instructions"`
+	Sudo         bool      `json:"sudo"`
 	Timeout      string    `json:"timeout"`
 	Commands     []rawRule `json:"commands"`
 }
@@ -104,10 +113,10 @@ func Parse(data []byte) (*Config, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-
 	cfg := &Config{
 		Name:         raw.Name,
 		Instructions: raw.Instructions,
+		Sudo:         raw.Sudo,
 		Timeout:      DefaultTimeout,
 	}
 	if raw.Timeout != "" {
@@ -117,7 +126,6 @@ func Parse(data []byte) (*Config, error) {
 		}
 		cfg.Timeout = d
 	}
-
 	for i, r := range raw.Commands {
 		rule, err := convertRule(r)
 		if err != nil {

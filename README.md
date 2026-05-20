@@ -10,7 +10,7 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 
 - Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
-- Two MCP tools are exposed: `list_commands` (describes what is allowed) and `run_command` (executes one command or a pipeline of them).
+- Two MCP tools are exposed: `list_commands` (describes what is allowed, including per-rule `description` strings) and `run_command` (executes one command or a pipeline of them).
 - Arguments are passed as a real `argv` array — quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
 - Commands are matched against `/etc/rrsh/rrsh.json` rules (override with `--config=` or `$RRSH_CONFIG`). Each rule is an absolute binary path, optionally with a regex the joined argument string must match, a per-command timeout, and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
@@ -25,34 +25,62 @@ sudo dpkg -i rrsh_*.deb
 sudo rpm -i rrsh-*.rpm
 ```
 
-This installs the binary to `/usr/bin/rrsh` and an example config to `/etc/rrsh/rrsh.json`.
+The package installs:
 
-## Set up the SSH user
+| Path | Notes |
+|------|-------|
+| `/usr/bin/rrsh` | the binary |
+| `/etc/rrsh/rrsh.json.example` | reference config — copy to `/etc/rrsh/rrsh.json` to activate |
+| `/etc/sudoers.d/rrsh` | sudoers grant for elevation (conffile, mode `0440`, validated by `visudo` at install) |
+| `/var/lib/rrsh/` | package-owned home dir for the `rrsh` user; ships with `.hushlogin` so sshd doesn't prepend its motd/last-login banner to JSON-RPC output |
 
-1. Edit `/etc/rrsh/rrsh.json` with the commands you want to allow (see below).
-2. Register the shell:
-   ```bash
-   echo /usr/bin/rrsh | sudo tee -a /etc/shells
-   ```
-3. Create the SSH user with rrsh as its shell:
-   ```bash
-   sudo useradd -m -s /usr/bin/rrsh ai
-   sudo mkdir -p ~ai/.ssh
-   sudo cp ~/.ssh/id_ed25519.pub ~ai/.ssh/authorized_keys
-   sudo chown -R ai:ai ~ai/.ssh && sudo chmod 700 ~ai/.ssh && sudo chmod 600 ~ai/.ssh/authorized_keys
-   ```
+The postinst script also:
+
+- Adds `/usr/bin/rrsh` to `/etc/shells`.
+- Creates the `rrsh` system user with `/usr/bin/rrsh` as its login shell and `/var/lib/rrsh` as its home directory. The password is locked — the account is SSH-key-only.
+
+**Note:** the package does *not* install a default `/etc/rrsh/rrsh.json`. Without one, rrsh refuses to start. Copy the shipped example to activate:
+
+```bash
+sudo cp /etc/rrsh/rrsh.json.example /etc/rrsh/rrsh.json
+sudo $EDITOR /etc/rrsh/rrsh.json
+```
+
+## Set up the SSH key
+
+The `rrsh` user's home (`/var/lib/rrsh`) is owned by root and contains no `authorized_keys` yet. Add Claude's (or another AI agent's) public key:
+
+```bash
+sudo install -d -m 755 /var/lib/rrsh/.ssh
+sudo install -m 644 /path/to/key.pub /var/lib/rrsh/.ssh/authorized_keys
+```
+
+The home dir is intentionally root-owned: the `rrsh` user cannot modify its own `authorized_keys`, only the operator can. That's the entire setup — the `rrsh` user can now log in via SSH and reach the JSON-RPC server.
 
 ## Connect from Claude
 
-Register rrsh as an MCP server. The transport is `ssh` itself — `ssh -T` opens a stdio pipe to the remote rrsh process, which is exactly what MCP needs.
+Two patterns. Pick one based on whether you want the host registered up front, or want any session to be able to dial in ad-hoc.
+
+**A. Register as an MCP server** (transport is `ssh -T`, no port, no daemon):
 
 ```bash
 claude mcp add rrsh-prod -- ssh -T ai@prod.example.com
 ```
 
-That's it. No daemon on the server, no port forward, no Subsystem config in sshd. The same `chsh` setup that gates the SSH session gates the MCP channel.
+In a Claude session, the two tools (`list_commands`, `run_command`) become available. Claude is expected to call `list_commands` first to discover what is permitted, then construct `run_command` calls with a structured `argv` slice. The MCP `initialize` response also includes any host-specific `instructions` you set in the config (see [Configuration](#configuration)).
 
-In a Claude session, the two tools (`list_commands`, `run_command`) become available. Claude is expected to call `list_commands` first to discover what is permitted, then construct `run_command` calls with a structured `argv` slice.
+**B. Drop a one-liner into the session** ("you can diagnose this host via `ssh ai@prod.example.com`"). No MCP registration. Claude SSHs ad-hoc using its bash tool. The first time Claude tries `ssh ai@prod.example.com whoami`, it gets an instructive rejection that explains how to send JSON-RPC requests:
+
+```
+rrsh: this is a JSON-RPC server, not an interactive shell.
+
+To use it, send newline-delimited JSON-RPC 2.0 requests over SSH stdin:
+  echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+    | ssh -T ai@prod.example.com
+…
+```
+
+From there Claude calls `initialize`, reads the `instructions` field for host context, and proceeds. This pattern scales to N hosts without N MCP config entries — the discoverability is in the protocol, not in your config.
 
 ## Configuration
 
@@ -60,6 +88,8 @@ In a Claude session, the two tools (`list_commands`, `run_command`) become avail
 
 ```json
 {
+  "name": "ntfy-prod-1",
+  "instructions": "You are on the ntfy production server. Use list_commands to see what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
   "timeout": "10s",
   "commands": [
     { "path": "/usr/bin/whoami",
@@ -79,6 +109,16 @@ In a Claude session, the two tools (`list_commands`, `run_command`) become avail
   ]
 }
 ```
+
+Top-level fields:
+
+| Field          | Default     | Meaning                                                                                                       |
+| -------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `name`         | `"rrsh"`    | Reported in MCP `serverInfo.name`. Useful for identifying which host Claude is connected to.                  |
+| `instructions` | empty       | Returned in MCP `initialize.instructions` — the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
+| `sudo`         | `false`     | Master switch for elevation. When `false`, every `run_command` whose target user differs from the SSH user is denied, and the privileged `rrsh sudo` subcommand refuses to run — even if `/etc/sudoers.d/rrsh` is in place. Must be `true` to use any rule whose `as:` list includes a non-self user. |
+| `timeout`      | `"10s"`     | Global command timeout, applied unless a rule sets its own.                                                   |
+| `commands`     | required    | Array of allowlist rules.                                                                                     |
 
 Fields on each command entry:
 
@@ -136,6 +176,8 @@ Executes one allowlisted command, or a pipeline of them. Exactly one of `argv` o
 
 Each stage is independently matched against the allowlist and authorized for its `as` user. Per-stage `as` lets an elevated stage feed an unprivileged filter.
 
+The pipeline field is the only way to compose commands — there is no shell, so the user-typed `|` and `>` characters have no meaning anywhere in rrsh. If your config allows `cat` and `grep` separately, the AI gets `cat /var/log/foo | grep error` by sending a two-stage `pipeline` array. There is no quoting concern: a literal pipe character inside an argument value (e.g. `grep "|"`) is just a byte in an argv element, not a metacharacter.
+
 **Return value:** structured JSON inside the MCP text content:
 
 ```json
@@ -160,16 +202,19 @@ When a rule's `as` list contains a user other than `self`, Claude can request th
 
 For rules whose `as` list contains exactly one non-self target, Claude does not need to pass `as` — rrsh implicitly elevates. This is the common "always root" case.
 
-Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo and it is gated by one sudoers line:
+Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo, and it is gated by two independent knobs:
 
-```
-# /etc/sudoers.d/ai
-ai ALL=(root,deploy) NOPASSWD: /usr/bin/rrsh sudo *
-```
+1. **The sudoers grant**, installed by the package at `/etc/sudoers.d/rrsh`:
+   ```
+   rrsh ALL=(root) NOPASSWD: /usr/bin/rrsh sudo *
+   ```
+   To allow other target users (e.g. `deploy`), edit the `(...)` part to list every target user that appears in any rule's `as:` list. The file is a conffile, so upgrades won't clobber your changes.
 
-List every target user that appears in any rule's `as:` list in the `(...)` part. The privileged half of rrsh (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the command against the rule's `as` list before executing — it never trusts its caller, does no flag parsing, and takes the originating user from `$SUDO_USER`.
+2. **The config-level `sudo` flag**, default `false`. Until you set `"sudo": true` at the top of `/etc/rrsh/rrsh.json`, the package's sudoers grant has no effect: the MCP server denies elevated calls with a clear error, and the privileged `rrsh sudo` half exits before running anything.
 
-**Trust boundary:** a parser/match bug in rrsh is a root compromise. Keep `as:` lists minimal, keep `args` regexes tight, and prefer one narrow rule per elevated command over a single permissive rule.
+The privileged half (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the command against the rule's `as` list before executing — it never trusts its caller, does no flag parsing, and takes the originating user from `$SUDO_USER`.
+
+**Trust boundary:** a parser/match bug in rrsh is a root compromise. Keep `as:` lists minimal, keep `args` regexes tight, leave `"sudo": false` until you actually need elevation, and prefer one narrow rule per elevated command over a single permissive rule.
 
 ## Logging
 

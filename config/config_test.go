@@ -62,6 +62,26 @@ func TestParse_Description(t *testing.T) {
 	}
 }
 
+func TestParse_SudoDefault(t *testing.T) {
+	cfg, err := Parse([]byte(`{"commands": [{"path": "/usr/bin/whoami"}]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sudo {
+		t.Error("Sudo should default to false")
+	}
+}
+
+func TestParse_SudoTrue(t *testing.T) {
+	cfg, err := Parse([]byte(`{"sudo": true, "commands": [{"path": "/usr/bin/whoami"}]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Sudo {
+		t.Error("Sudo should be true when explicitly set")
+	}
+}
+
 func TestParse_AsDefaults(t *testing.T) {
 	cfg, err := Parse([]byte(`{"commands": [
 		{"path": "/usr/bin/whoami"},

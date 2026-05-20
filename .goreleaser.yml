@@ -6,16 +6,12 @@ before:
 builds:
   - id: rrsh_linux_amd64
     binary: rrsh
-    env:
-      - CGO_ENABLED=0
     ldflags:
       - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
     goos: [ linux ]
     goarch: [ amd64 ]
   - id: rrsh_linux_armv6
     binary: rrsh
-    env:
-      - CGO_ENABLED=0
     ldflags:
       - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
     goos: [ linux ]
@@ -23,8 +19,6 @@ builds:
     goarm: [ 6 ]
   - id: rrsh_linux_armv7
     binary: rrsh
-    env:
-      - CGO_ENABLED=0
     ldflags:
       - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
     goos: [ linux ]
@@ -32,8 +26,6 @@ builds:
     goarm: [ 7 ]
   - id: rrsh_linux_arm64
     binary: rrsh
-    env:
-      - CGO_ENABLED=0
     ldflags:
       - "-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}"
     goos: [ linux ]
@@ -41,17 +33,28 @@ builds:
 nfpms:
   - package_name: rrsh
     homepage: https://github.com/binwiederhier/rrsh
-    maintainer: Philipp C. Heckel <philipp.heckel@gmail.com>
-    description: Restricted login shell that allowlists commands via YAML
+    maintainer: Philipp C. Heckel <phil@heckel.io>
+    description: JSON-RPC login shell that allowlists commands for AI agents
     license: Apache 2.0
     formats:
       - deb
       - rpm
     bindir: /usr/bin
     contents:
-      - src: rrsh.json.example
-        dst: /etc/rrsh/rrsh.json
+      - src: pkg/etc/rrsh/rrsh.json.example
+        dst: /etc/rrsh/rrsh.json.example
+      - src: pkg/etc/sudoers.d/rrsh
+        dst: /etc/sudoers.d/rrsh
         type: "config|noreplace"
+        file_info:
+          mode: 0440
+          owner: root
+          group: root
+      - src: pkg/var/lib/rrsh/.hushlogin
+        dst: /var/lib/rrsh/.hushlogin
+    scripts:
+      postinstall: "scripts/postinst.sh"
+      postremove: "scripts/postrm.sh"
 archives:
   - id: rrsh_linux
     ids:
@@ -63,7 +66,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - rrsh.json.example
+      - pkg/etc/rrsh/rrsh.json.example
 checksum:
   name_template: 'checksums.txt'
 snapshot:

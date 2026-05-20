@@ -1,0 +1,157 @@
+{
+  "name": "ntfy",
+  "instructions": "You are connected to the 'ntfy' host via rrsh, a read-only diagnostic gateway. Call list_commands first — the args_pattern regex on each rule tells you exactly which argv shapes are accepted. Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) — you do NOT need to pass {\"as\": \"root\"} for those. Log readers (tail/head/cat/grep/wc), fail2ban-client, last, and lastb all run as root because the log files and auxiliary databases require it. No write access. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
+  "sudo": true,
+  "timeout": "10s",
+  "commands": [
+    {
+      "path": "/usr/bin/whoami",
+      "description": "Show the effective username."
+    },
+    {
+      "path": "/usr/bin/id",
+      "description": "Show the user/group identity (uid, gid, groups)."
+    },
+    {
+      "path": "/usr/bin/hostname",
+      "description": "Print the system hostname."
+    },
+    {
+      "path": "/usr/bin/uptime",
+      "description": "Show how long the system has been up and the load average."
+    },
+    {
+      "path": "/usr/bin/uname",
+      "args": "^-a$",
+      "description": "Print kernel/OS info. Only `-a` is permitted."
+    },
+    {
+      "path": "/usr/bin/ps",
+      "args": "^(aux|auxf|-ef|-eo .+)$",
+      "description": "List processes. Permitted args: `aux`, `auxf`, `-ef`, or `-eo <format>`."
+    },
+    {
+      "path": "/usr/bin/top",
+      "args": "^-bn1$",
+      "description": "Take one batch-mode snapshot of top (`-bn1`)."
+    },
+    {
+      "path": "/usr/bin/pstree",
+      "description": "Show the process tree."
+    },
+    {
+      "path": "/usr/bin/free",
+      "args": "^(-h|-m|-g|)$",
+      "description": "Report memory usage. Optional `-h`, `-m`, or `-g`; no args also OK."
+    },
+    {
+      "path": "/usr/bin/df",
+      "args": "^(-h|-i|)$",
+      "description": "Report filesystem space usage. Optional `-h` or `-i`; no args also OK."
+    },
+    {
+      "path": "/usr/bin/du",
+      "args": "^-sh /var/log(/.*)?$",
+      "description": "Summarize disk usage under /var/log (or a subpath of it). Must be `-sh <path>`."
+    },
+    {
+      "path": "/usr/bin/lsblk",
+      "description": "List block devices."
+    },
+    {
+      "path": "/usr/sbin/ip",
+      "args": "^(addr|route|link|link show)$",
+      "description": "Show network state. Permitted: `addr`, `route`, `link`, `link show`."
+    },
+    {
+      "path": "/usr/bin/ss",
+      "args": "^-(t|u|tu)lnp$",
+      "description": "List listening sockets with PIDs. Permitted: `-tlnp`, `-ulnp`, `-tulnp`."
+    },
+    {
+      "path": "/usr/bin/ping",
+      "args": "^-c \\d+ .+$",
+      "timeout": "30s",
+      "description": "Ping a host a fixed number of times. Must be `-c <count> <host>`."
+    },
+    {
+      "path": "/usr/bin/dig",
+      "description": "Perform DNS lookups."
+    },
+    {
+      "path": "/usr/bin/curl",
+      "args": "^-sS https?://localhost(:\\d+)?(/.*)?$",
+      "timeout": "15s",
+      "description": "Fetch a local HTTP/HTTPS URL (localhost only). Must be `-sS <url>`."
+    },
+    {
+      "path": "/usr/bin/last",
+      "args": "^(-n \\d+|-\\d+|)$",
+      "as": ["root"],
+      "description": "Show recent successful logins from /var/log/wtmp. Optional `-n <count>` or `-<count>`."
+    },
+    {
+      "path": "/usr/bin/lastb",
+      "args": "^(-n \\d+|-\\d+|)$",
+      "as": ["root"],
+      "description": "Show recent FAILED login attempts from /var/log/btmp. Useful for spotting SSH brute-force activity. Optional `-n <count>` or `-<count>`."
+    },
+    {
+      "path": "/usr/bin/fail2ban-client",
+      "args": "^status( [\\w-]+)?$",
+      "as": ["root"],
+      "description": "Inspect fail2ban state. `status` lists active jails; `status <jail>` (e.g. `status sshd` or `status nginx-400`) shows currently-banned IPs. Jail names may contain hyphens."
+    },
+    {
+      "path": "/usr/bin/journalctl",
+      "args": "^(--no-pager )?-u (ntfy|nginx|ssh|sshd)( -n \\d+| --since .+)?$",
+      "as": ["root"],
+      "description": "Read systemd journal for ntfy, nginx, ssh, or sshd. Patterns: `[--no-pager] -u <unit> [-n <count> | --since <expr>]`. Auto-elevated so journal entries from other users are visible."
+    },
+    {
+      "path": "/usr/bin/tail",
+      "args": "^-n \\d+ /var/log/(ntfy|nginx|syslog|auth\\.log).*$",
+      "as": ["root"],
+      "description": "Tail the last N lines of an ntfy, nginx, syslog, or auth.log file. Must be `-n <count> <path>`."
+    },
+    {
+      "path": "/usr/bin/head",
+      "args": "^-n \\d+ /var/log/(ntfy|nginx|syslog|auth\\.log).*$",
+      "as": ["root"],
+      "description": "Read the first N lines of an ntfy, nginx, syslog, or auth.log file. Must be `-n <count> <path>`."
+    },
+    {
+      "path": "/usr/bin/cat",
+      "args": "^/var/log/(ntfy|nginx|syslog|auth\\.log).*$",
+      "as": ["root"],
+      "description": "Read a file under /var/log/{ntfy,nginx} or /var/log/{syslog,auth.log}*."
+    },
+    {
+      "path": "/usr/bin/ls",
+      "args": "^-la?h? /var/log(/.*)?$",
+      "description": "List /var/log or a subpath. Must be `-l[a][h] <path>`."
+    },
+    {
+      "path": "/usr/bin/wc",
+      "args": "^-l /var/log/(ntfy|nginx|syslog|auth\\.log).*$",
+      "as": ["root"],
+      "description": "Count lines in a log file under /var/log/{ntfy,nginx} or /var/log/{syslog,auth.log}*. Must be `-l <path>`."
+    },
+    {
+      "path": "/usr/bin/grep",
+      "args": "^-i .+ /var/log/(ntfy|nginx|syslog|auth\\.log).*$",
+      "as": ["root"],
+      "description": "Case-insensitive grep against a log file under /var/log/{ntfy,nginx} or /var/log/{syslog,auth.log}*. Must be `-i <pattern> <path>`."
+    },
+    {
+      "path": "/usr/bin/systemctl",
+      "args": "^(status ntfy|status nginx|is-active ntfy|is-active nginx|list-timers|show ntfy|show nginx)$",
+      "description": "Inspect systemd units. Permitted: `status|is-active|show <ntfy|nginx>`, or `list-timers`."
+    },
+    {
+      "path": "/usr/bin/ntfy",
+      "args": "^(user list|access list|tier list)$",
+      "description": "Inspect ntfy state. Permitted: `user list`, `access list`, `tier list`."
+    }
+  ]
+}

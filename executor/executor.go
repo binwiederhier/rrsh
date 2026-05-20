@@ -12,6 +12,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"time"
@@ -84,13 +85,14 @@ func (e *Executor) Execute(path string, argv []string, rule *config.CommandRule,
 		Stderr:    stderr.Bytes(),
 		Truncated: stdout.truncated || stderr.truncated,
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.ExitCode = TimeoutExitCode
 		res.TimedOut = true
 		return res
 	}
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			res.ExitCode = exitErr.ExitCode()
 			return res
 		}
@@ -192,13 +194,14 @@ func (e *Executor) ExecutePipeline(stages []Stage) Result {
 	res.Stderr = mergedErr.Bytes()
 	res.Truncated = truncated
 
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.ExitCode = TimeoutExitCode
 		res.TimedOut = true
 		return res
 	}
 	if lastErr != nil {
-		if exitErr, ok := lastErr.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(lastErr, &exitErr) {
 			res.ExitCode = exitErr.ExitCode()
 			return res
 		}

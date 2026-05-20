@@ -33,7 +33,7 @@ func Execute(version, commit, date string) {
 	if len(args) > 0 {
 		switch args[0] {
 		case "sudo":
-			sudoMain(args[1:])
+			runSudo(args[1:])
 			return
 		case "-h", "-help", "--help":
 			printUsage(os.Stdout)
@@ -43,7 +43,7 @@ func Execute(version, commit, date string) {
 			return
 		}
 	}
-	serveMain(args)
+	runServe(args)
 }
 
 const usageText = `rrsh — JSON-RPC server for AI-driven remote command execution
@@ -61,10 +61,6 @@ Options:
                     overridden by $` + envConfigPath + `)
   --help            print this help
   --version         print version
-
-Internal:
-  rrsh sudo <path> <argv...>   privileged half (called via /usr/bin/sudo).
-                               Re-validates against the allowlist.
 `
 
 func printUsage(w io.Writer) {

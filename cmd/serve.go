@@ -10,7 +10,7 @@ import (
 	"github.com/binwiederhier/rrsh/mcp"
 )
 
-// serveMain is the default code path. rrsh exposes a JSON-RPC server over
+// runServe is the default code path. rrsh exposes a JSON-RPC server over
 // stdin/stdout — no shell-string parsing, no `-c` mode. When invoked with
 // `-c "..."` or positional args, it errors out pointing the caller to MCP.
 //
@@ -20,10 +20,12 @@ import (
 //	rrsh --config /etc/rrsh.json # same, custom config
 //
 // Anything else is the legacy shell mode that has been removed.
-func serveMain(args []string) {
+func runServe(args []string) {
 	fs := flag.NewFlagSet("rrsh", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	fs.Usage = func() { printUsage(os.Stderr) }
+	fs.Usage = func() {
+		printUsage(os.Stderr)
+	}
 	var (
 		configFile  = fs.String("config", "", "")
 		commandFlag = fs.String("c", "", "")
@@ -43,6 +45,15 @@ func serveMain(args []string) {
 	}
 
 	if *commandFlag != "" || fs.NArg() > 0 {
+		printShellModeRejection(os.Stderr)
+		os.Exit(exitGeneric)
+	}
+
+	// Interactive humans (TTY on stdin) get the same self-documenting
+	// rejection. Without this check, an `ssh user@host` with no command,
+	// or a local `su user`, drops into a JSON-RPC loop that silently
+	// rejects every line typed — looks like a hang.
+	if isTerminal(os.Stdin) {
 		printShellModeRejection(os.Stderr)
 		os.Exit(exitGeneric)
 	}
@@ -107,6 +118,17 @@ func sshTargetHint() string {
 		user = "<user>"
 	}
 	return user + "@" + host
+}
+
+// isTerminal returns true if f is connected to a terminal (i.e. a
+// character device). Uses the file's stat mode — no CGO, no external
+// dependency. False if Stat fails.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // resolveConfigPath applies the precedence --config > $RRSH_CONFIG > default.

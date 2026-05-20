@@ -10,9 +10,16 @@ package mcp
 
 import "encoding/json"
 
-// ProtocolVersion is the MCP protocol version this server speaks. Clients
-// requesting a different version are still answered with this — they may
-// downgrade or fail on their own.
+// ProtocolVersion is the MCP wire protocol version this server speaks.
+//
+// This is *not* the rrsh binary version (that's `serverInfo.version`,
+// populated from main's ldflags). The MCP spec defines a fixed set of
+// allowed values for this field — currently date strings like
+// "2025-03-26" — and clients match against that whitelist. Reporting an
+// arbitrary version (e.g. "v0.3.1") would make every MCP-compliant
+// client reject the handshake.
+//
+// Bump this when adopting a newer MCP spec, not when releasing rrsh.
 const ProtocolVersion = "2025-03-26"
 
 // JSON-RPC 2.0 error codes (subset).
@@ -125,8 +132,8 @@ type runCommandOutput struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
-// allowlistEntry is one element of the list_commands tool's output.
-type allowlistEntry struct {
+// commandEntry is one element of the list_commands tool's output.
+type commandEntry struct {
 	Path        string   `json:"path"`
 	ArgsPattern string   `json:"args_pattern,omitempty"`
 	As          []string `json:"as"`

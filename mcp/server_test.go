@@ -188,11 +188,10 @@ func TestServer_RunCommand_PipelineWithDeniedStage(t *testing.T) {
 // Pipe character in an argument value must be passed through as a literal
 // — this is the example the user gave that motivated the JSON-RPC route.
 func TestServer_RunCommand_PipeInsideArgIsLiteral(t *testing.T) {
-	in := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/usr/bin/grep","--help"]}}}` + "\n"
-	// We can't easily exercise grep's behavior without a fixture, but we
-	// can confirm an argv containing pipe/redirect bytes is matched and
-	// dispatched without rejection. Use /bin/echo to inspect the result.
-	in = `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo"," | > /dev/null"]}}}` + "\n"
+	// argv containing pipe/redirect bytes must be dispatched without
+	// rejection — the bytes are part of the string value, not shell
+	// metacharacters. Use /bin/echo to confirm they survive the round-trip.
+	in := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo"," | > /dev/null"]}}}` + "\n"
 	out, _ := testServer(in)
 	resps := decodeResponses(t, out.String())
 	result := resps[0]["result"].(map[string]any)
@@ -283,6 +282,118 @@ func TestServer_BothArgvAndPipelineRejected(t *testing.T) {
 	result := resps[0]["result"].(map[string]any)
 	if isErr, _ := result["isError"].(bool); !isErr {
 		t.Errorf("expected isError=true when both argv and pipeline set")
+	}
+}
+
+func TestServer_Initialize_InstructionsAndName(t *testing.T) {
+	cfg := &config.Config{
+		Name:         "ntfy-prod-1",
+		Instructions: "You are on the ntfy prod box. Use list_commands to discover what is allowed.",
+		Timeout:      5 * time.Second,
+		Commands: []config.CommandRule{
+			{Path: "/bin/echo", As: []string{config.SelfUser}},
+		},
+	}
+	out := &bytes.Buffer{}
+	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
+	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	if err := srv.Serve(); err != nil {
+		t.Fatalf("Serve error: %v", err)
+	}
+	resps := decodeResponses(t, out.String())
+	result := resps[0]["result"].(map[string]any)
+	if result["instructions"] != cfg.Instructions {
+		t.Errorf("instructions = %v, want %q", result["instructions"], cfg.Instructions)
+	}
+	serverInfo := result["serverInfo"].(map[string]any)
+	if serverInfo["name"] != cfg.Name {
+		t.Errorf("serverInfo.name = %v, want %q", serverInfo["name"], cfg.Name)
+	}
+}
+
+func TestServer_Initialize_NoInstructionsEmitsNoField(t *testing.T) {
+	// Default cfg has no Instructions; the JSON response should omit the
+	// field rather than emitting "instructions": "".
+	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
+	out, _ := testServer(in)
+	if strings.Contains(out.String(), `"instructions"`) {
+		t.Errorf("instructions field should be omitted when empty, got: %s", out.String())
+	}
+}
+
+func TestServer_RunCommand_OversizedRequestRejected(t *testing.T) {
+	// Build a request larger than MaxRequestBytes — pad with whitespace
+	// inside a string so the JSON is still well-formed if it were parsed.
+	huge := strings.Repeat("x", MaxRequestBytes+1024)
+	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","` + huge + `"]}}}` + "\n" +
+		// Follow with a valid request to confirm we resync.
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	out, err := testServer(in)
+	if err != nil {
+		t.Fatalf("Serve error: %v", err)
+	}
+	resps := decodeResponses(t, out.String())
+	if len(resps) != 2 {
+		t.Fatalf("got %d responses, want 2: %s", len(resps), out.String())
+	}
+	// First response should be a parse error.
+	if _, ok := resps[0]["error"].(map[string]any); !ok {
+		t.Errorf("response 0 should be an error: %v", resps[0])
+	}
+	// Second response should succeed.
+	if _, ok := resps[1]["result"]; !ok {
+		t.Errorf("response 1 should be a result: %v", resps[1])
+	}
+}
+
+func TestServer_RunCommand_ElevationDeniedWhenSudoDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Sudo:    false, // explicit, though it's the default
+		Timeout: 5 * time.Second,
+		Commands: []config.CommandRule{
+			{Path: "/bin/echo", As: []string{"root"}, Description: "Echo as root."},
+		},
+	}
+	out := &bytes.Buffer{}
+	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","x"],"as":"root"}}}` + "\n"
+	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	if err := srv.Serve(); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	resps := decodeResponses(t, out.String())
+	result := resps[0]["result"].(map[string]any)
+	if isErr, _ := result["isError"].(bool); !isErr {
+		t.Errorf("expected isError=true when sudo:false and elevation requested, got: %v", result)
+	}
+	text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "sudo") {
+		t.Errorf("error message should mention sudo flag, got: %q", text)
+	}
+}
+
+func TestServer_RunCommand_ElevationAllowedWhenSudoEnabled(t *testing.T) {
+	// We can't actually invoke /usr/bin/sudo in the test environment, but
+	// we can verify the gate passes — the call should reach the executor
+	// (which then fails to exec sudo, which surfaces as a non-zero exit).
+	// The point is: no "elevation disabled" message.
+	cfg := &config.Config{
+		Sudo:    true,
+		Timeout: 1 * time.Second,
+		Commands: []config.CommandRule{
+			{Path: "/bin/echo", As: []string{"root"}},
+		},
+	}
+	out := &bytes.Buffer{}
+	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","x"],"as":"root"}}}` + "\n"
+	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	if err := srv.Serve(); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	resps := decodeResponses(t, out.String())
+	result := resps[0]["result"].(map[string]any)
+	text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	if strings.Contains(text, "elevation disabled") {
+		t.Errorf("should not say elevation disabled when sudo:true, got: %q", text)
 	}
 }
 
