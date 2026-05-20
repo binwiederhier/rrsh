@@ -25,11 +25,91 @@ func TestParse_Valid(t *testing.T) {
 	if cfg.Commands[0].Path != "/usr/bin/whoami" || cfg.Commands[0].ArgsPattern != nil {
 		t.Errorf("command[0] = %+v", cfg.Commands[0])
 	}
-	if cfg.Commands[1].ArgsPattern == nil || cfg.Commands[1].ArgsPattern.String() != "^-la$" {
-		t.Errorf("command[1].ArgsPattern = %v", cfg.Commands[1].ArgsPattern)
+	// ArgsPattern is wrapped in ^(?:…)$ by the parser so we don't compare
+	// the literal source string. Instead exercise the behavior: the rule
+	// matches its intended argv shape and rejects extras.
+	if cfg.Commands[1].ArgsPattern == nil {
+		t.Errorf("command[1].ArgsPattern is nil")
+	}
+	if !cfg.Commands[1].ArgsPattern.MatchString("-la") {
+		t.Errorf("command[1] should match \"-la\"")
+	}
+	if cfg.Commands[1].ArgsPattern.MatchString("-la /etc/passwd") {
+		t.Errorf("command[1] should not match \"-la /etc/passwd\" (auto-anchor in effect)")
 	}
 	if cfg.Commands[2].Timeout != 60*time.Second {
 		t.Errorf("command[2].Timeout = %v, want 60s", cfg.Commands[2].Timeout)
+	}
+}
+
+// TestParse_AutoAnchorsArgsRegex proves that an operator who writes a
+// rule without ^…$ anchors does NOT accidentally accept extra argv:
+// the matcher's MatchString is unanchored by default, so the parser
+// must wrap the pattern to fail closed.
+func TestParse_AutoAnchorsArgsRegex(t *testing.T) {
+	t.Parallel()
+	cfg, err := Parse([]byte(`{"commands": [
+		{"path": "/usr/bin/x", "args": "restart ntfy"}
+	]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pat := cfg.Commands[0].ArgsPattern
+	if pat == nil {
+		t.Fatal("expected compiled pattern")
+	}
+	// The intended argv shape matches.
+	if !pat.MatchString("restart ntfy") {
+		t.Errorf("intended argv should match")
+	}
+	// Pre-fix vulnerability: extra suffix used to match too.
+	if pat.MatchString("restart ntfy; reboot") {
+		t.Errorf("extra suffix should NOT match after auto-anchoring")
+	}
+	// Pre-fix vulnerability: extra prefix used to match too.
+	if pat.MatchString("foo restart ntfy") {
+		t.Errorf("extra prefix should NOT match after auto-anchoring")
+	}
+}
+
+// TestParse_RejectsInvalidUsernameInAs covers fix #5 — usernames that
+// could be confused for sudo flags or that aren't valid POSIX login
+// names must be rejected at parse time.
+func TestParse_RejectsInvalidUsernameInAs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		json string
+	}{
+		{"leading-dash", `{"commands":[{"path":"/bin/x","as":["-h"]}]}`},
+		{"double-dash", `{"commands":[{"path":"/bin/x","as":["--"]}]}`},
+		{"with-space", `{"commands":[{"path":"/bin/x","as":["root user"]}]}`},
+		{"with-comma", `{"commands":[{"path":"/bin/x","as":["root,deploy"]}]}`},
+		{"uppercase", `{"commands":[{"path":"/bin/x","as":["Root"]}]}`},
+		{"too-long", `{"commands":[{"path":"/bin/x","as":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse([]byte(tc.json))
+			if err == nil {
+				t.Errorf("expected error for invalid username, got none")
+			}
+		})
+	}
+}
+
+func TestParse_AcceptsValidUsernameInAs(t *testing.T) {
+	t.Parallel()
+	cfg, err := Parse([]byte(`{"commands":[
+		{"path":"/bin/x","as":["self","root","deploy","_apt","www-data","host$"]}
+	]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"self", "root", "deploy", "_apt", "www-data", "host$"}
+	if !equalStrings(cfg.Commands[0].As, want) {
+		t.Errorf("As = %v, want %v", cfg.Commands[0].As, want)
 	}
 }
 

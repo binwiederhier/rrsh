@@ -142,7 +142,14 @@ func convertRule(r rawRule) (CommandRule, error) {
 	}
 	rule := CommandRule{Path: r.Path}
 	if r.Args != "" {
-		re, err := regexp.Compile(r.Args)
+		// Wrap the operator's pattern in ^(?:…)$ so MatchString — which
+		// is unanchored by default — cannot match the rule's substring
+		// anywhere in a longer argv. Without this, a rule of
+		// "restart ntfy" (operator forgot anchors) would accept argv
+		// like ["foo","restart","ntfy","; reboot"]. Idempotent: if the
+		// operator already wrote ^…$, wrapping makes ^(?:^…$)$ which
+		// matches identically.
+		re, err := regexp.Compile("^(?:" + r.Args + ")$")
 		if err != nil {
 			return CommandRule{}, fmt.Errorf("invalid `args` regex for %s: %w", r.Path, err)
 		}
@@ -164,6 +171,19 @@ func convertRule(r rawRule) (CommandRule, error) {
 	return rule, nil
 }
 
+// validUsername matches a conservative subset of POSIX login names:
+// lowercase letter or underscore start, then alnum/underscore/dash, up
+// to 32 chars, optionally ending in `$` (Samba machine account form).
+// The rrsh-internal SelfUser token is allowed separately.
+//
+// The point is to refuse values that would survive into sudo's argv as
+// stray flags (e.g. "-h", "--", "-u") or contain characters sudo or the
+// shell could interpret. sudo itself does not shell-interpret usernames,
+// so existing weird names would just fail to look up — but failing
+// closed in the config is cheaper than tracing why a rule mysteriously
+// stopped working in production.
+var validUsername = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}\$?$`)
+
 // normalizeAs validates an `as` list and defaults it to ["self"] when omitted.
 func normalizeAs(path string, as []string) ([]string, error) {
 	if len(as) == 0 {
@@ -177,6 +197,9 @@ func normalizeAs(path string, as []string) ([]string, error) {
 		}
 		if seen[u] {
 			return nil, fmt.Errorf("`as` for %s has duplicate entry %q", path, u)
+		}
+		if u != SelfUser && !validUsername.MatchString(u) {
+			return nil, fmt.Errorf("`as` for %s has invalid username %q (expected POSIX login name)", path, u)
 		}
 		seen[u] = true
 		out = append(out, u)

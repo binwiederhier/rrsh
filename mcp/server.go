@@ -33,6 +33,13 @@ const userRoot = "root"
 // this cap are dropped and a parse error is returned.
 const maxRequestBytes = 1 << 20 // 1 MiB
 
+// maxPipelineStages caps how many stages a single run_command pipeline
+// may contain. Each stage spawns one process, so without a cap an
+// authenticated caller could trigger thousands of forks per request and
+// exhaust the host's PID / FD limits — a DoS against the whole host,
+// not just rrsh. 16 is comfortably more than any real diagnostic chain.
+const maxPipelineStages = 16
+
 // listCommandsSchema is the JSON Schema for the list_commands tool's
 // input (no arguments).
 var listCommandsSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
@@ -299,7 +306,7 @@ func (s *Server) toolListCommands() (any, *rpcError) {
 		entry := commandEntry{
 			Path:        r.Path,
 			As:          r.As,
-			Description: r.Description,
+			Description: sanitizeDescription(r.Description),
 		}
 		if r.ArgsPattern != nil {
 			entry.ArgsPattern = r.ArgsPattern.String()
@@ -392,6 +399,9 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 	if a.As != "" {
 		return s.deny("top-level `as` is not valid with pipeline — set `as` per stage", ""), nil
+	}
+	if len(a.Pipeline) > maxPipelineStages {
+		return s.deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages), ""), nil
 	}
 
 	stages := make([]exec.Stage, 0, len(a.Pipeline))
@@ -526,11 +536,41 @@ func (s *Server) fullPipelineLog(stages []runStep) string {
 	return strings.Join(parts, " | ")
 }
 
+// logEscaper neutralizes characters that syslog/rsyslog could interpret
+// as record terminators. Without this, an argv element containing a
+// newline could be used to forge fake log entries that look like
+// legitimate ALLOWED/DENIED records — an authenticated attacker would
+// otherwise be able to plant decoy events to confuse incident review.
+var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
+
+// sanitizeDescription strips C0 control characters (and DEL) from a
+// rule's description before it is returned via list_commands. The
+// description is operator-authored free text but lands in whatever UI
+// the AI client uses to display it; a stray ESC (0x1B) could become an
+// ANSI cursor-movement attack, and a BEL/BS combo could rewrite output.
+// Tab and newline are preserved so multi-line descriptions still
+// render naturally.
+func sanitizeDescription(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7F {
+			return -1 // drop
+		}
+		return r
+	}, s)
+}
+
 func joinForLog(path string, argv []string) string {
 	if len(argv) == 0 {
-		return path
+		return logEscaper.Replace(path)
 	}
-	return path + " " + strings.Join(argv, " ")
+	escaped := make([]string, len(argv))
+	for i, a := range argv {
+		escaped[i] = logEscaper.Replace(a)
+	}
+	return logEscaper.Replace(path) + " " + strings.Join(escaped, " ")
 }
 
 func errResponse(id json.RawMessage, code int, msg string) *response {

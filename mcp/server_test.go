@@ -419,6 +419,91 @@ func TestServer_RunCommand_ElevationAllowedWhenSudoEnabled(t *testing.T) {
 	}
 }
 
+// TestJoinForLog_EscapesControlChars covers fix #2 — newlines, CRs and
+// NUL bytes in argv elements must not be passed verbatim into syslog,
+// or an authenticated caller could forge fake log records that look
+// like legitimate ALLOWED/DENIED entries.
+func TestJoinForLog_EscapesControlChars(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		path string
+		argv []string
+		want string
+	}{
+		{"newline", "/bin/echo", []string{"a\nALLOWED: root cmd=/bin/sh"}, "/bin/echo a\\nALLOWED: root cmd=/bin/sh"},
+		{"cr", "/bin/echo", []string{"a\rb"}, "/bin/echo a\\rb"},
+		{"nul", "/bin/echo", []string{"a\x00b"}, "/bin/echo a\\0b"},
+		{"clean", "/bin/echo", []string{"hello", "world"}, "/bin/echo hello world"},
+		{"path with newline", "/bin/x\n", nil, "/bin/x\\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := joinForLog(tc.path, tc.argv)
+			if got != tc.want {
+				t.Errorf("joinForLog = %q, want %q", got, tc.want)
+			}
+			if strings.ContainsAny(got, "\n\r\x00") {
+				t.Errorf("result still contains raw control bytes: %q", got)
+			}
+		})
+	}
+}
+
+// TestSanitizeDescription covers fix #8 — operator-authored description
+// strings must not be able to inject terminal control sequences (ANSI
+// cursor moves, BEL, BS) into AI-side rendering of list_commands.
+func TestSanitizeDescription(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"clean", "Show username.", "Show username."},
+		{"keeps newline", "line one\nline two", "line one\nline two"},
+		{"keeps tab", "col1\tcol2", "col1\tcol2"},
+		{"strips ESC", "before\x1b[2Jafter", "before[2Jafter"},
+		{"strips BEL", "ding\x07ding", "dingding"},
+		{"strips BS", "rewrite\x08\x08\x08foo", "rewritefoo"},
+		{"strips NUL", "a\x00b", "ab"},
+		{"strips DEL", "a\x7fb", "ab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := sanitizeDescription(tc.in)
+			if got != tc.want {
+				t.Errorf("sanitizeDescription(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestServer_RunCommand_PipelineLengthCapped covers fix #3 — a pipeline
+// with more than maxPipelineStages stages must be rejected before any
+// process is spawned.
+func TestServer_RunCommand_PipelineLengthCapped(t *testing.T) {
+	t.Parallel()
+	// Build a pipeline of maxPipelineStages+1 trivial echo stages.
+	stages := make([]string, maxPipelineStages+1)
+	for i := range stages {
+		stages[i] = `{"argv":["/bin/echo","x"]}`
+	}
+	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"pipeline":[` + strings.Join(stages, ",") + `]}}}` + "\n"
+	out, _ := testServer(t, in)
+	resps := decodeResponses(t, out.String())
+	result := resps[0]["result"].(map[string]any)
+	if isErr, _ := result["isError"].(bool); !isErr {
+		t.Errorf("expected isError=true for over-cap pipeline, got: %v", result)
+	}
+	text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "stage limit") {
+		t.Errorf("error message should mention stage limit, got: %q", text)
+	}
+}
+
 func TestServer_RunCommand_Stdin(t *testing.T) {
 	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/cat"],"stdin":"piped in"}}}` + "\n"

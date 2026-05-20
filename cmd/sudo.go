@@ -110,11 +110,22 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
+// logEscaper neutralizes characters that syslog/rsyslog could interpret
+// as record terminators. Without this, an argv element containing a
+// newline could be used to forge fake log entries that look like
+// legitimate ALLOWED/DENIED records — an authenticated attacker would
+// otherwise be able to plant decoy events to confuse incident review.
+var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
+
 func joinForLog(path string, argv []string) string {
 	if len(argv) == 0 {
-		return path
+		return logEscaper.Replace(path)
 	}
-	return path + " " + strings.Join(argv, " ")
+	escaped := make([]string, len(argv))
+	for i, a := range argv {
+		escaped[i] = logEscaper.Replace(a)
+	}
+	return logEscaper.Replace(path) + " " + strings.Join(escaped, " ")
 }
 
 // resolveAllowedUsers replaces every "self" token in the rule's as: list
