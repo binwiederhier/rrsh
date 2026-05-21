@@ -76,27 +76,19 @@ func normalizeUser(requestedUser, currentUser string) string {
 	return requestedUser
 }
 
-// authorizeUser returns the effective user a call should run as, or
-// errUserNotPermitted if the requested user is not in the rule's
-// allowed list. The returned user can differ from `runAs` for the
-// implicit-elevation case: a rule that allows exactly one non-self
-// user auto-elevates when the caller didn't request a specific user
-// (the common "always root" case). `runAs` must already be normalized.
-func authorizeUser(runAsUser, currentUser string, allowedUsers []string) (string, error) {
-	var single string
+// authorizeUser returns errUserNotPermitted if runAsUser is not in the
+// rule's allowed list. "self" entries in the list are substituted with
+// currentUser before comparison. runAsUser must already be normalized.
+func authorizeUser(requestedUser, currentUser string, allowedUsers []string) error {
 	for _, u := range allowedUsers {
 		if u == config.SelfUser {
 			u = currentUser
 		}
-		if u == runAsUser {
-			return runAsUser, nil
+		if u == requestedUser {
+			return nil
 		}
-		single = u
 	}
-	if runAsUser == currentUser && len(allowedUsers) == 1 {
-		return single, nil
-	}
-	return "", errUserNotPermitted
+	return errUserNotPermitted
 }
 
 // formatCommandForLog formats a pipeline as a single space-joined string for

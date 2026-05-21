@@ -251,40 +251,37 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 		argv := step.Argv[1:]
 
 		// Make sure command is allowed
-		runAsUser := normalizeUser(step.As, s.user)
+		requestedUser := normalizeUser(step.As, s.user)
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
-			s.log.Denied(commandForLog, runAsUser)
+			s.log.Denied(commandForLog, requestedUser)
 			return nil, deny("command not allowed: " + util.JoinForLog(path, argv))
 		}
 
-		effective, err := authorizeUser(runAsUser, s.user, rule.As)
-		if err != nil {
-			s.log.Denied(commandForLog, runAsUser)
-			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), runAsUser))
+		// Make sure the requested user is allowed to run the command
+		if err := authorizeUser(requestedUser, s.user, rule.As); err != nil {
+			s.log.Denied(commandForLog, requestedUser)
+			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), requestedUser))
 		}
-		runAsUser = effective // may flip self → root for implicit-elevation rules
 
-		// For elevation, rewrite the stage to invoke
-		// /usr/bin/sudo … rrsh sudo <path> <argv>. The privileged half
-		// re-validates from disk against the same rule's `as:` list.
-		if runAsUser != s.user {
+		// Maybe re-write command as: /usr/bin/sudo rrsh sudo <path> <argv>
+		if requestedUser != s.user {
 			if !s.cfg.Sudo {
-				s.log.Denied(commandForLog, runAsUser)
+				s.log.Denied(commandForLog, requestedUser)
 				return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
 			}
-			path, argv = s.buildSudoCommand(runAsUser, path, argv)
+			path, argv = s.buildSudoCommand(requestedUser, path, argv)
 		}
 
-		var stageStdin io.Reader
+		var stdin io.Reader
 		if i == 0 && stdinStr != "" {
-			stageStdin = strings.NewReader(stdinStr)
+			stdin = strings.NewReader(stdinStr)
 		}
 		stages = append(stages, &exec.Stage{
 			Path:  path,
 			Argv:  argv,
 			Rule:  rule,
-			Stdin: stageStdin,
+			Stdin: stdin,
 		})
 	}
 	s.log.Allowed(commandForLog, s.user)

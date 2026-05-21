@@ -173,16 +173,15 @@ There is no shell, so the user-typed `|` and `>` characters have no meaning anyw
 
 ## Elevation
 
-When a rule's `as` list contains a user other than `self`, Claude can request that user by passing `"as": "<user>"` on the `run_command` call (or per-stage in `run_pipeline`):
+When a rule's `as` list contains a user other than `self`, Claude must request that user explicitly by passing `"as": "<user>"` on the `run_command` call (or per-stage in `run_pipeline`):
 
-| `run_command` params                               | Resolves to                                       |
-| -------------------------------------------------- | ------------------------------------------------- |
-| `{argv: [...]}`                                    | run as the SSH user (default)                     |
-| `{argv: [...], as: "root"}`                        | run as `root` (if `root` is in the rule's `as`)   |
-| `{argv: [...], as: "deploy"}`                      | run as `deploy`                                   |
-| `{argv: ["/bin/systemctl","restart","ntfy"]}`      | implicit `root` for single-user rules             |
+| `run_command` params                               | Resolves to                                                                  |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `{argv: [...]}`                                    | run as the SSH user (only valid if the rule's `as` includes `self`)          |
+| `{argv: [...], as: "root"}`                        | run as `root` (only valid if `root` is in the rule's `as`)                   |
+| `{argv: [...], as: "deploy"}`                      | run as `deploy` (only valid if `deploy` is in the rule's `as`)               |
 
-For rules whose `as` list contains exactly one non-self user, Claude does not need to pass `as` - rrsh implicitly elevates. This is the common "always root" case.
+The AI sees each rule's `as` list in `hello.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `self` is a denial.
 
 Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo, and it is gated by two independent knobs:
 

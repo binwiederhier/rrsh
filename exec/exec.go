@@ -66,12 +66,12 @@ func finalize(res *Result, ctx context.Context, err error) *Result {
 func ExecutePipeline(stages []*Stage) *Result {
 	if len(stages) == 0 {
 		return &Result{ExitCode: 1, Stderr: []byte("rrsh: empty pipeline\n")}
-	}
-	if len(stages) == 1 {
+	} else if len(stages) == 1 {
 		s := stages[0]
 		return Execute(s.Path, s.Argv, s.Rule, s.Stdin)
 	}
 
+	// Update stages with timeout
 	timeout := defaultTimeout
 	for _, s := range stages {
 		if s.Rule != nil && s.Rule.Timeout > timeout {
@@ -81,6 +81,7 @@ func ExecutePipeline(stages []*Stage) *Result {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	// Make stderr buffers for each stage
 	cmds := make([]*osexec.Cmd, len(stages))
 	stderrs := make([]*util.CappedBuffer, len(stages))
 	for i, s := range stages {
@@ -88,9 +89,13 @@ func ExecutePipeline(stages []*Stage) *Result {
 		stderrs[i] = util.NewCappedBuffer(maxOutputBytes)
 		cmds[i].Stderr = stderrs[i]
 	}
+
+	// Connect stdin to first command
 	if stages[0].Stdin != nil {
 		cmds[0].Stdin = stages[0].Stdin
 	}
+
+	// Connect stdout[i] to stdin[i+1] (cmd1 | cmd2 | ...)
 	for i := 0; i < len(cmds)-1; i++ {
 		pipe, err := cmds[i].StdoutPipe()
 		if err != nil {
@@ -98,9 +103,12 @@ func ExecutePipeline(stages []*Stage) *Result {
 		}
 		cmds[i+1].Stdin = pipe
 	}
+
+	// Get a buffer to the last command's stdout
 	finalOut := util.NewCappedBuffer(maxOutputBytes)
 	cmds[len(cmds)-1].Stdout = finalOut
 
+	// Start them all and wait
 	for _, c := range cmds {
 		if err := c.Start(); err != nil {
 			// Kill anything already started, best effort.
@@ -112,7 +120,6 @@ func ExecutePipeline(stages []*Stage) *Result {
 			return &Result{ExitCode: 1, Stderr: []byte("rrsh: pipeline start failed: " + err.Error() + "\n")}
 		}
 	}
-
 	var lastErr error
 	for i, c := range cmds {
 		if err := c.Wait(); err != nil && i == len(cmds)-1 {
@@ -120,6 +127,7 @@ func ExecutePipeline(stages []*Stage) *Result {
 		}
 	}
 
+	// Collect errors
 	var mergedErr bytes.Buffer
 	truncated := finalOut.Truncated()
 	for _, s := range stderrs {
