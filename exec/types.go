@@ -14,8 +14,6 @@ const (
 	// timeoutExitCode is returned when the context deadline fires.
 	timeoutExitCode = 124
 	// defaultTimeout applies when the rule does not set its own.
-	// Intentionally fixed (not config-tunable) so a misconfigured global
-	// can't let runaway commands hold the JSON-RPC channel hostage.
 	defaultTimeout = 30 * time.Second
 )
 

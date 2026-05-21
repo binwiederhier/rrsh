@@ -49,7 +49,7 @@ func TestParse_Valid(t *testing.T) {
 }
 
 // TestParse_PathOnlyRequiresZeroArgv verifies that a single-element
-// command (just the path regex) means "exactly zero argv elements" —
+// command (just the path regex) means "exactly zero argv elements" -
 // not "any argv shape."
 func TestParse_PathOnlyRequiresZeroArgv(t *testing.T) {
 	t.Parallel()
@@ -100,7 +100,7 @@ func TestParse_AutoAnchorsCommandRegex(t *testing.T) {
 	}
 }
 
-// TestParse_RejectsInvalidUsernameInAs covers fix #5 — usernames that
+// TestParse_RejectsInvalidUsernameInAs covers fix #5 - usernames that
 // could be confused for sudo flags or that aren't valid POSIX login
 // names must be rejected at parse time.
 func TestParse_RejectsInvalidUsernameInAs(t *testing.T) {

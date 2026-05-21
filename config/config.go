@@ -1,10 +1,3 @@
-// Package config parses rrsh's JSON allowlist. The full schema is
-// documented in README.md; this file is the authoritative implementation.
-//
-// Each rule's `command` field is a list of regexes: element 0 matches
-// the binary path, elements 1..N-1 match argv 1-for-1. All patterns are
-// auto-anchored at parse time. The parser is strict (DisallowUnknownFields)
-// because it sits on the privileged trust boundary.
 package config
 
 import (

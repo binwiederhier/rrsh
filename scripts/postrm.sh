@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# postrm — runs after files are removed. We only do destructive cleanup
+# postrm - runs after files are removed. We only do destructive cleanup
 # on `purge`, never on plain `remove` or `upgrade`. On purge:
 #   1. Delete the rrsh user (without --remove: /usr/lib/rrsh/home is
 #      package-owned and dpkg handles it; an operator-added

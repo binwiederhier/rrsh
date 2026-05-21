@@ -153,7 +153,7 @@ func TestMatch_JoinAmbiguityDefeated(t *testing.T) {
 	}
 }
 
-// command[0] is itself a regex — a rule can match multiple binaries.
+// command[0] is itself a regex - a rule can match multiple binaries.
 func TestMatch_CommandZeroIsRegex(t *testing.T) {
 	t.Parallel()
 	m := New([]config.CommandRule{
@@ -166,7 +166,7 @@ func TestMatch_CommandZeroIsRegex(t *testing.T) {
 		t.Error("/usr/bin/head /etc/hostname should match (regex command[0])")
 	}
 	if _, ok := m.Match("/usr/bin/tail", []string{"/etc/hostname"}); ok {
-		t.Error("/usr/bin/tail must NOT match — outside the alternation")
+		t.Error("/usr/bin/tail must NOT match - outside the alternation")
 	}
 }
 

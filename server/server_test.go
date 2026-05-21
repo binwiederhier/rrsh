@@ -26,6 +26,28 @@ func testRule(command ...string) config.CommandRule {
 	}
 }
 
+// mustNewServer constructs a Server for tests, failing the test if
+// server.New returns an error (which only happens if os.Executable
+// fails - a system-level problem we can't usefully recover from in a
+// test).
+//
+// We override srv.rrsh so elevation tests don't actually re-exec the
+// test binary. By default New stores os.Executable(), which during
+// `go test` is the test binary itself - if the caller has broad
+// sudoers, `sudo -n <testbin> sudo …` would spawn the test recursively
+// until the test timeout. Pointing rrsh at a nonexistent path makes
+// sudo fail fast (exec ENOENT) so the elevation tests verify the gate
+// without invoking real sudo.
+func mustNewServer(t *testing.T, cfg *config.Config, self, in string, out *bytes.Buffer) *Server {
+	t.Helper()
+	srv, err := New(cfg, logger.New("tester"), self, strings.NewReader(in), out)
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	srv.rrsh = "/nonexistent/rrsh-test-binary"
+	return srv
+}
+
 // testServer spins up a server.Server backed by a small default allowlist
 // and feeds it the given NDJSON request stream. It returns the captured
 // stdout (the server's response stream) and any transport-level error
@@ -47,7 +69,7 @@ func testServer(t *testing.T, in string) (*bytes.Buffer, error) {
 	cfg.Commands[3].Description = "Concatenate stdin."
 	cfg.Commands[6].Description = "Filter lines."
 	out := &bytes.Buffer{}
-	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := mustNewServer(t, cfg, "tester", in, out)
 	err := srv.Serve()
 	return out, err
 }
@@ -90,13 +112,13 @@ func TestServer_Hello(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
 		Name:         "ntfy-prod-1",
-		Instructions: "You are on the ntfy prod box. Call list first.",
+		Instructions: "You are on the ntfy prod box.",
 		Commands:     []config.CommandRule{testRule("/bin/echo")},
 	}
-	Version = "v0.0.0-test"
+	cfg.Commands[0].Description = "Echo something."
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"hello"}` + "\n"
-	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := mustNewServer(t, cfg, "tester", in, out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -111,11 +133,22 @@ func TestServer_Hello(t *testing.T) {
 	if result["name"] != cfg.Name {
 		t.Errorf("name = %v, want %q", result["name"], cfg.Name)
 	}
-	if result["version"] != Version {
-		t.Errorf("version = %v, want %q", result["version"], Version)
+	if _, present := result["version"]; present {
+		t.Errorf("hello result should not include a version field, got: %v", result)
 	}
 	if result["instructions"] != cfg.Instructions {
 		t.Errorf("instructions = %v, want %q", result["instructions"], cfg.Instructions)
+	}
+	commands, ok := result["commands"].([]any)
+	if !ok {
+		t.Fatalf("hello.commands missing or wrong type: %v", result)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("got %d commands, want 1", len(commands))
+	}
+	first := commands[0].(map[string]any)
+	if first["description"] != "Echo something." {
+		t.Errorf("description = %v", first["description"])
 	}
 }
 
@@ -137,30 +170,6 @@ func TestServer_Hello_DefaultName(t *testing.T) {
 	result := resps[0]["result"].(map[string]any)
 	if result["name"] != "rrsh" {
 		t.Errorf("name = %v, want %q", result["name"], "rrsh")
-	}
-}
-
-func TestServer_List(t *testing.T) {
-	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":2,"method":"list"}` + "\n"
-	out, _ := testServer(t, in)
-	resps := decodeResponses(t, out.String())
-	if len(resps) != 1 {
-		t.Fatalf("got %d responses", len(resps))
-	}
-	result := resps[0]["result"].(map[string]any)
-	commands := result["commands"].([]any)
-	if len(commands) == 0 {
-		t.Fatalf("expected at least one command")
-	}
-	// Spot-check: the first rule is /bin/echo + one ".*"
-	first := commands[0].(map[string]any)
-	cmd := first["command"].([]any)
-	if cmd[0] != "/bin/echo" {
-		t.Errorf("command[0] = %v, want /bin/echo", cmd[0])
-	}
-	if first["description"] != "Echo one argument." {
-		t.Errorf("description = %v", first["description"])
 	}
 }
 
@@ -251,7 +260,7 @@ func TestServer_Run_PipelineWithDeniedStage(t *testing.T) {
 }
 
 // Pipe character in an argument value must be passed through as a literal
-// — this is the example the user gave that motivated the JSON-RPC route.
+// - this is the example the user gave that motivated the JSON-RPC route.
 func TestServer_Run_PipeInsideArgIsLiteral(t *testing.T) {
 	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":10,"method":"run","params":{"argv":["/bin/echo"," | > /dev/null"]}}` + "\n"
@@ -259,13 +268,13 @@ func TestServer_Run_PipeInsideArgIsLiteral(t *testing.T) {
 	resps := decodeResponses(t, out.String())
 	rr := decodeRunResult(t, resps[0])
 	if !strings.Contains(rr.Stdout, " | > /dev/null") {
-		t.Errorf("stdout = %q — pipe/redirect bytes should survive as literal", rr.Stdout)
+		t.Errorf("stdout = %q - pipe/redirect bytes should survive as literal", rr.Stdout)
 	}
 }
 
 func TestServer_Run_NonZeroExit(t *testing.T) {
 	t.Parallel()
-	// Child non-zero exit is NOT a transport error — it lives in result.exit.
+	// Child non-zero exit is NOT a transport error - it lives in result.exit.
 	in := `{"jsonrpc":"2.0","id":11,"method":"run","params":{"argv":["/bin/false"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
@@ -307,7 +316,7 @@ func TestServer_UnknownMethod(t *testing.T) {
 
 func TestServer_Notification_NoResponse(t *testing.T) {
 	t.Parallel()
-	// A request without an `id` field is a notification — no response is
+	// A request without an `id` field is a notification - no response is
 	// emitted even if dispatch fails.
 	in := `{"jsonrpc":"2.0","method":"no/such/method"}` + "\n"
 	out, _ := testServer(t, in)
@@ -319,8 +328,8 @@ func TestServer_Notification_NoResponse(t *testing.T) {
 func TestServer_MultipleRequests(t *testing.T) {
 	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":1,"method":"hello"}` + "\n" +
-		`{"jsonrpc":"2.0","id":2,"method":"list"}` + "\n" +
-		`{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/bin/echo","x"]}}` + "\n"
+		`{"jsonrpc":"2.0","id":2,"method":"run","params":{"argv":["/bin/echo","x"]}}` + "\n" +
+		`{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/bin/echo","y"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if len(resps) != 3 {
@@ -350,12 +359,12 @@ func TestServer_Run_BothArgvAndPipelineRejected(t *testing.T) {
 
 func TestServer_Run_OversizedRequestRejected(t *testing.T) {
 	t.Parallel()
-	// Build a request larger than maxRequestBytes — pad with whitespace
+	// Build a request larger than maxRequestBytes - pad with whitespace
 	// inside a string so the JSON is still well-formed if it were parsed.
 	huge := strings.Repeat("x", maxRequestBytes+1024)
 	in := `{"jsonrpc":"2.0","id":1,"method":"run","params":{"argv":["/bin/echo","` + huge + `"]}}` + "\n" +
 		// Follow with a valid request to confirm we resync.
-		`{"jsonrpc":"2.0","id":2,"method":"list"}` + "\n"
+		`{"jsonrpc":"2.0","id":2,"method":"hello"}` + "\n"
 	out, err := testServer(t, in)
 	if err != nil {
 		t.Fatalf("Serve error: %v", err)
@@ -383,7 +392,7 @@ func TestServer_Run_ElevationDeniedWhenSudoDisabled(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"run","params":{"argv":["/bin/echo","x"],"as":"root"}}` + "\n"
-	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := mustNewServer(t, cfg, "tester", in, out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -403,7 +412,7 @@ func TestServer_Run_ElevationDeniedWhenSudoDisabled(t *testing.T) {
 func TestServer_Run_ElevationAllowedWhenSudoEnabled(t *testing.T) {
 	t.Parallel()
 	// We can't actually invoke /usr/bin/sudo in the test environment, but
-	// we can verify the gate passes — the call should reach the executor
+	// we can verify the gate passes - the call should reach the executor
 	// (which then fails to exec sudo, surfacing as a non-zero exit). The
 	// point is: no "elevation disabled" RPC error.
 	echoRoot := testRule("/bin/echo", ".*")
@@ -414,7 +423,7 @@ func TestServer_Run_ElevationAllowedWhenSudoEnabled(t *testing.T) {
 	}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"run","params":{"argv":["/bin/echo","x"],"as":"root"}}` + "\n"
-	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := mustNewServer(t, cfg, "tester", in, out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -455,7 +464,7 @@ func TestServer_Run_Stdin(t *testing.T) {
 	}
 }
 
-// TestJoinForLog_EscapesControlChars covers fix #2 — newlines, CRs and
+// TestJoinForLog_EscapesControlChars covers fix #2 - newlines, CRs and
 // NUL bytes in argv elements must not be passed verbatim into syslog,
 // or an authenticated caller could forge fake log records that look
 // like legitimate ALLOWED/DENIED entries.
@@ -487,7 +496,7 @@ func TestJoinForLog_EscapesControlChars(t *testing.T) {
 	}
 }
 
-// TestSanitizeDescription covers fix #8 — operator-authored description
+// TestSanitizeDescription covers fix #8 - operator-authored description
 // strings must not be able to inject terminal control sequences (ANSI
 // cursor moves, BEL, BS) into AI-side rendering of list.
 func TestSanitizeDescription(t *testing.T) {

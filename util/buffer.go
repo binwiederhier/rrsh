@@ -24,7 +24,7 @@ func NewCappedBuffer(limit int) *CappedBuffer {
 	return &CappedBuffer{limit: limit}
 }
 
-// Write implements io.Writer. It always returns len(p), nil — bytes past
+// Write implements io.Writer. It always returns len(p), nil - bytes past
 // the cap are dropped and the truncated flag is set.
 func (c *CappedBuffer) Write(p []byte) (int, error) {
 	if c.truncated {

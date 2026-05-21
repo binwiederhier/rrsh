@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# postinst — runs after files are extracted on .deb/.rpm install or
+# postinst - runs after files are extracted on .deb/.rpm install or
 # upgrade. We:
 #   1. Add /usr/bin/rrsh to /etc/shells so chsh accepts it.
 #   2. Create the 'rrsh' system-style user with rrsh as its login shell

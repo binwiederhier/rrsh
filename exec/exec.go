@@ -1,6 +1,3 @@
-// Package exec runs allowlisted commands as native subprocesses. It
-// operates on argv slices — there is no shell tokenization here. Output
-// is captured into bounded buffers (maxOutputBytes per stream).
 package exec
 
 import (

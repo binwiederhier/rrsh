@@ -1,0 +1,479 @@
+{
+  "name": "ntfy-stats",
+  "instructions": "You are connected to the 'ntfy-stats' host via rrsh, a read-only diagnostic gateway. The PRIMARY USE of this host is querying Prometheus. The `hello` response you just received includes the full allowlist in its `commands` field - each rule's `command` is a list of regexes (element 0 matches the binary path, elements 1..N-1 match argv 1-for-1). Argv length must equal len(command)-1 AND each element must match its corresponding pattern. Multiple rules can share command[0] to describe alternative argv shapes. Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) - you do NOT need to pass {\"as\":\"root\"} for those.\n\nPROMETHEUS HTTP API\n  Prometheus runs locally on port 9090. Use /usr/bin/curl -sS against http://localhost:9090/...\n\n  Key endpoints (all GET; URL-encode the PromQL):\n    /api/v1/query?query=<promql>[&time=<ts>]                                   instant query\n    /api/v1/query_range?query=<promql>&start=<ts>&end=<ts>&step=<dur>          range query\n    /api/v1/series?match[]=<selector>[&start=<ts>&end=<ts>]                    series by selector\n    /api/v1/labels                                                             all label names\n    /api/v1/label/<name>/values                                                values for one label\n    /api/v1/targets[?state=active|dropped|any]                                 scrape target health\n    /api/v1/targets/metadata?match_target=<selector>                           target-level metric metadata\n    /api/v1/metadata[?metric=<name>&limit=<n>]                                 metric type/help metadata\n    /api/v1/alerts                                                             active alerts\n    /api/v1/rules[?type=alert|record]                                          alerting + recording rules\n    /api/v1/status/{config,runtimeinfo,buildinfo,tsdb,flags,walreplay}         server status\n    /api/v1/query_exemplars?query=<promql>&start=<ts>&end=<ts>                 exemplars (trace links)\n    /api/v1/format_query?query=<promql>                                        canonicalize PromQL\n    /-/healthy, /-/ready                                                       liveness/readiness\n    /metrics                                                                   Prometheus's own metrics\n\n  Timestamps: RFC3339 (2026-05-21T12:00:00Z) or unix-seconds (1747828800). Step: a duration like 15s, 1m, 1h.\n\n  Pretty-print the JSON by piping to jq:\n    pipeline=[{argv:[\"/usr/bin/curl\",\"-sS\",\"http://localhost:9090/api/v1/targets\"]},{argv:[\"/usr/bin/jq\",\".\"]}]\n\n  Common queries:\n    up                                                process up/down per target\n    up{job=\"ntfy\"}                                  ntfy-only\n    rate(ntfy_messages_published_total[5m])           message-publish rate, 5m window\n    histogram_quantile(0.95, sum by (le)(rate(http_request_duration_seconds_bucket[5m])))   p95 HTTP latency\n\nALERTMANAGER (port 9093)\n  /api/v2/status, /api/v2/alerts, /api/v2/alerts/groups, /api/v2/silences, /api/v2/receivers, /-/healthy, /-/ready, /metrics.\n\nOTHER EXPORTERS\n  Any exporter on localhost:9XXX exposes /metrics in Prometheus text format. Useful: 9100 = node_exporter (host CPU/mem/disk/net), 9091 = pushgateway. Grep the text for individual gauges, or query Prometheus for time series.\n\nLOGS\n  /var/log/prometheus/*.log, /var/log/alertmanager/*.log, /var/log/syslog, /var/log/auth.log. Use journalctl -u <unit> for the in-memory journal (units: prometheus, alertmanager, prometheus-node-exporter).\n\nNo write access. /-/reload, /-/quit, and the /api/v1/admin/* endpoints are intentionally NOT in the allowlist. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
+  "sudo": true,
+  "commands": [
+    {
+      "command": [
+        "/usr/bin/whoami"
+      ],
+      "description": "Show the effective username."
+    },
+    {
+      "command": [
+        "/usr/bin/id"
+      ],
+      "description": "Show the user/group identity (uid, gid, groups). No args."
+    },
+    {
+      "command": [
+        "/usr/bin/hostname"
+      ],
+      "description": "Print the system hostname."
+    },
+    {
+      "command": [
+        "/usr/bin/uptime"
+      ],
+      "description": "Show how long the system has been up and the load average."
+    },
+    {
+      "command": [
+        "/usr/bin/uname",
+        "-a"
+      ],
+      "description": "Print kernel/OS info. Only `-a` is permitted."
+    },
+    {
+      "command": [
+        "/usr/bin/ps",
+        "aux"
+      ],
+      "description": "List processes (BSD-style: ps aux)."
+    },
+    {
+      "command": [
+        "/usr/bin/ps",
+        "-ef"
+      ],
+      "description": "List processes (System V-style: ps -ef)."
+    },
+    {
+      "command": [
+        "/usr/bin/top",
+        "-bn1"
+      ],
+      "description": "Take one batch-mode snapshot of top."
+    },
+    {
+      "command": [
+        "/usr/bin/free",
+        "-(h|m|g)?"
+      ],
+      "description": "Report memory usage. Optional unit flag: -h, -m, or -g."
+    },
+    {
+      "command": [
+        "/usr/bin/df",
+        "-(h|i)?"
+      ],
+      "description": "Report filesystem space usage. Optional flag: -h (human-readable) or -i (inodes)."
+    },
+    {
+      "command": [
+        "/usr/bin/lsblk"
+      ],
+      "description": "List block devices."
+    },
+    {
+      "command": [
+        "/(usr/sbin|usr/bin|sbin|bin)/ip",
+        "(addr|route|link)"
+      ],
+      "description": "Show network state: addr, route, or link. Accepts any standard `ip` binary path."
+    },
+    {
+      "command": [
+        "/usr/bin/ss",
+        "-(t|u|tu)lnp"
+      ],
+      "description": "List listening sockets with PIDs. Allowed flag combos: -tlnp, -ulnp, -tulnp."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/query(_range|_exemplars|s|)\\?\\S+"
+      ],
+      "timeout": "60s",
+      "description": "PromQL endpoints that take a `?query=...` URL. Covers /api/v1/query (instant), /api/v1/query_range (range, needs start/end/step), /api/v1/query_exemplars (exemplars, needs start/end), and /api/v1/queries. URL-encode the PromQL: spaces=%20, [=%5B, ]=%5D, etc."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/format_query\\?query=\\S+"
+      ],
+      "description": "Canonicalize a PromQL expression. Useful for de-obfuscating operator-written queries before reading them."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/series\\?\\S+"
+      ],
+      "description": "List series matching one or more `?match[]=<selector>` filters."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/labels(\\?\\S+)?"
+      ],
+      "description": "List all label names. Optional `?start=&end=&match[]=` filters."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/label/[a-zA-Z_][a-zA-Z0-9_]*/values(\\?\\S+)?"
+      ],
+      "description": "List values for a single label name. Optional `?start=&end=&match[]=` filters."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/targets(/metadata)?(\\?\\S+)?"
+      ],
+      "description": "Scrape target health (/api/v1/targets, optional ?state=active|dropped|any) or target-level metric metadata (/api/v1/targets/metadata?match_target=)."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/metadata(\\?\\S+)?"
+      ],
+      "description": "Metric type/help metadata. Optional `?metric=<name>&limit=<n>`."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/alerts"
+      ],
+      "description": "List currently active alerts."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/rules(\\?type=(alert|record))?"
+      ],
+      "description": "List alerting and recording rules. Optional `?type=alert` or `?type=record`."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/api/v1/status/(config|runtimeinfo|buildinfo|tsdb|flags|walreplay)"
+      ],
+      "description": "Prometheus server status: live config, runtime info, build info, TSDB stats, command-line flags, or WAL replay progress."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9090/-/(healthy|ready)"
+      ],
+      "description": "Prometheus liveness/readiness probes. Returns 200 OK or non-2xx."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9093/api/v2/(status|alerts|alerts/groups|silences|receivers)(\\?\\S*)?"
+      ],
+      "description": "Alertmanager v2 API: status, active alerts, grouped alerts, silences, receivers. Optional query string for filters."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9093/-/(healthy|ready)"
+      ],
+      "description": "Alertmanager liveness/readiness probes."
+    },
+    {
+      "command": [
+        "/usr/bin/curl",
+        "-sS",
+        "http://localhost:9\\d{3}/metrics"
+      ],
+      "description": "Scrape /metrics from any Prometheus exporter on localhost (port 9000-9999). Returns Prometheus text format. Common ports: 9090 Prometheus, 9091 pushgateway, 9093 alertmanager, 9100 node_exporter."
+    },
+    {
+      "command": [
+        "/usr/bin/jq",
+        "\\S+"
+      ],
+      "description": "Process JSON. Pipe a curl response into this stage to extract or pretty-print fields. Filter examples: `.`, `.data.result`, `.[0].labels.instance`."
+    },
+    {
+      "command": [
+        "/usr/bin/jq",
+        "-(r|c|S|n|e)",
+        "\\S+"
+      ],
+      "description": "jq with a single flag: -r raw output, -c compact, -S sort-keys, -n null-input, -e set exit code on null/false."
+    },
+    {
+      "command": [
+        "/usr/bin/grep",
+        "-i",
+        ".+"
+      ],
+      "description": "Case-insensitive grep, intended as a pipeline stage (filter Prometheus text-format /metrics output)."
+    },
+    {
+      "command": [
+        "/usr/bin/grep",
+        "-iE",
+        ".+"
+      ],
+      "description": "Same as above but extended regex."
+    },
+    {
+      "command": [
+        "/usr/bin/wc",
+        "-l"
+      ],
+      "description": "Count lines, as a pipeline stage."
+    },
+    {
+      "command": [
+        "/usr/bin/systemctl",
+        "(status|is-active)",
+        "(prometheus|alertmanager|prometheus-node-exporter|grafana-server)"
+      ],
+      "description": "Inspect a stats-stack systemd unit's runtime state."
+    },
+    {
+      "command": [
+        "/usr/bin/systemctl",
+        "list-timers"
+      ],
+      "description": "List systemd timers."
+    },
+    {
+      "command": [
+        "/usr/bin/journalctl",
+        "--no-pager",
+        "-u",
+        "(prometheus|alertmanager|prometheus-node-exporter|grafana-server|ssh|sshd)"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Show the full systemd journal for a stats-stack unit."
+    },
+    {
+      "command": [
+        "/usr/bin/journalctl",
+        "--no-pager",
+        "-u",
+        "(prometheus|alertmanager|prometheus-node-exporter|grafana-server|ssh|sshd)",
+        "-n",
+        "\\d+"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Show the last N journal entries for a stats-stack unit."
+    },
+    {
+      "command": [
+        "/usr/bin/journalctl",
+        "--no-pager",
+        "-u",
+        "(prometheus|alertmanager|prometheus-node-exporter|grafana-server|ssh|sshd)",
+        "--since",
+        ".+"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Show journal entries since a time expression (e.g. '1 hour ago')."
+    },
+    {
+      "command": [
+        "/usr/bin/journalctl",
+        "--no-pager",
+        "-u",
+        "(prometheus|alertmanager|prometheus-node-exporter|grafana-server|ssh|sshd)",
+        "--grep",
+        ".+"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Filter a unit's journal by case-sensitive regex."
+    },
+    {
+      "command": [
+        "/usr/bin/journalctl",
+        "--no-pager",
+        "-u",
+        "(prometheus|alertmanager|prometheus-node-exporter|grafana-server|ssh|sshd)",
+        "-n",
+        "\\d+",
+        "--grep",
+        ".+"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Filter the last N journal entries by regex."
+    },
+    {
+      "command": [
+        "/usr/bin/tail",
+        "-n",
+        "\\d+",
+        "/var/log/(prometheus|alertmanager)/[^/]+\\.log(\\.\\d+)?"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Tail the last N lines of a Prometheus or Alertmanager log file."
+    },
+    {
+      "command": [
+        "/usr/bin/tail",
+        "-n",
+        "\\d+",
+        "/var/log/(syslog|auth\\.log)(\\.\\d+)?"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Tail the last N lines of /var/log/syslog or /var/log/auth.log (or their .N rotations)."
+    },
+    {
+      "command": [
+        "/usr/bin/head",
+        "-n",
+        "\\d+",
+        "/var/log/(prometheus|alertmanager)/[^/]+\\.log(\\.\\d+)?"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Read the first N lines of a Prometheus or Alertmanager log file."
+    },
+    {
+      "command": [
+        "/usr/bin/cat",
+        "/var/log/(prometheus|alertmanager)/[^/]+\\.log(\\.\\d+)?"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Dump a Prometheus or Alertmanager log file. For .gz rotations use zcat."
+    },
+    {
+      "command": [
+        "/usr/bin/cat",
+        "/etc/prometheus/[\\w-][\\w.-]*\\.ya?ml"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Read a Prometheus config file under /etc/prometheus (prometheus.yml, alerts.yml, etc.)."
+    },
+    {
+      "command": [
+        "/usr/bin/cat",
+        "/etc/alertmanager/[\\w-][\\w.-]*\\.ya?ml"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Read an Alertmanager config file under /etc/alertmanager."
+    },
+    {
+      "command": [
+        "/usr/bin/zcat",
+        "/var/log/(prometheus|alertmanager)/[^/]+\\.log\\.\\d+\\.gz"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Dump a gzipped Prometheus/Alertmanager log rotation."
+    },
+    {
+      "command": [
+        "/usr/bin/zgrep",
+        "-i",
+        ".+",
+        "/var/log/(prometheus|alertmanager)/[^/]+\\.log\\.\\d+\\.gz"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Case-insensitive grep against a gzipped log rotation."
+    },
+    {
+      "command": [
+        "/usr/bin/ls",
+        "-la?h?",
+        "/var/log/(prometheus|alertmanager)(/[^./][^/]*)*"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "List /var/log/prometheus or /var/log/alertmanager (or a subpath)."
+    },
+    {
+      "command": [
+        "/usr/bin/du",
+        "-sh",
+        "/var/lib/(prometheus|alertmanager)(/[^./][^/]*)*"
+      ],
+      "as": [
+        "root"
+      ],
+      "timeout": "60s",
+      "description": "Summarize disk usage under /var/lib/prometheus (TSDB) or /var/lib/alertmanager. Recursive on the TSDB can take a while; up to 60s."
+    },
+    {
+      "command": [
+        "/usr/bin/promtool",
+        "query",
+        "instant",
+        "http://localhost:9090",
+        "\\S+"
+      ],
+      "description": "Run an instant PromQL query via promtool (alternative to curl + /api/v1/query). Promtool ships with the prometheus package."
+    },
+    {
+      "command": [
+        "/usr/bin/promtool",
+        "query",
+        "range",
+        "http://localhost:9090",
+        "\\S+",
+        "--start",
+        "\\S+",
+        "--end",
+        "\\S+",
+        "--step",
+        "\\S+"
+      ],
+      "timeout": "60s",
+      "description": "Run a range PromQL query via promtool. --start and --end accept RFC3339 or unix epoch; --step is a duration like 15s, 1m."
+    },
+    {
+      "command": [
+        "/usr/bin/promtool",
+        "check",
+        "(config|rules)",
+        "/etc/prometheus/[\\w-][\\w.-]*\\.ya?ml"
+      ],
+      "as": [
+        "root"
+      ],
+      "description": "Validate a Prometheus config or rules file."
+    }
+  ]
+}

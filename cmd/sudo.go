@@ -15,6 +15,11 @@ import (
 // envSudoUser is the env var sudo sets to the original invoking user.
 const envSudoUser = "SUDO_USER"
 
+// logEscaper neutralizes characters that syslog could interpret as
+// record terminators - argv with embedded newlines must not forge fake
+// audit-log entries.
+var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
+
 // runSudo is the privileged half of rrsh's elevation flow, invoked as
 //
 //	/usr/bin/sudo [-u USER] /usr/bin/rrsh sudo <path> <argv...>
@@ -39,7 +44,7 @@ func runSudo(args []string) {
 	log := logger.New(me)
 	defer log.Close()
 
-	// Hardcoded config path — the caller is untrusted, so we must not
+	// Hardcoded config path - the caller is untrusted, so we must not
 	// read --config or $RRSH_CONFIG here.
 	cfg, err := config.Load(defaultConfigPath)
 	if err != nil {
@@ -98,11 +103,6 @@ func runSudo(args []string) {
 	os.Stderr.Write(res.Stderr)
 	os.Exit(res.ExitCode)
 }
-
-// logEscaper neutralizes characters that syslog could interpret as
-// record terminators — argv with embedded newlines must not forge fake
-// audit-log entries.
-var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
 
 func joinForLog(path string, argv []string) string {
 	if len(argv) == 0 {

@@ -1,8 +1,3 @@
-// Package server implements rrsh's JSON-RPC 2.0 server over stdio.
-// Three methods are exposed: hello, list, run. Server-side refusals
-// (matcher denials, oversize requests, elevation disabled) use the
-// JSON-RPC error envelope; the child process's own exit code lives in
-// the run result's `exit` field.
 package server
 
 import "encoding/json"
@@ -40,21 +35,16 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-// helloResult is the response body of the `hello` method.
-// Instructions carries host-specific guidance the AI reads on first
-// contact.
+// helloResult is the response body of the `hello` method. Instructions
+// carries host-specific guidance the AI reads on first contact;
+// Commands is the full allowlist (one round-trip self-description).
 type helloResult struct {
-	Name         string `json:"name"`
-	Version      string `json:"version"`
-	Instructions string `json:"instructions,omitempty"`
+	Name         string          `json:"name"`
+	Instructions string          `json:"instructions,omitempty"`
+	Commands     []*commandEntry `json:"commands"`
 }
 
-// listResult is the response body of the `list` method.
-type listResult struct {
-	Commands []commandEntry `json:"commands"`
-}
-
-// commandEntry is one element of `list`'s commands array. Command is
+// commandEntry is one element of hello's commands array. Command is
 // the rule's source regex patterns: index 0 matches the binary path,
 // indices 1..N-1 match argv 1-for-1.
 type commandEntry struct {

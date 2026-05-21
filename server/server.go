@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
@@ -16,16 +16,8 @@ import (
 	"github.com/binwiederhier/rrsh/matcher"
 )
 
-// Version is the rrsh binary version, set by main at startup.
-var Version = "dev"
-
 const (
-	sudoBinary = "/usr/bin/sudo"
-	// When elevating to root we omit `-u root` to match standard sudo usage.
-	userRoot = "root"
-	// maxRequestBytes caps a single JSON-RPC line (DoS guard).
-	maxRequestBytes = 1 << 20 // 1 MiB
-	// maxPipelineStages caps processes spawned per pipeline (DoS guard).
+	maxRequestBytes   = 1 << 20 // 1 MiB
 	maxPipelineStages = 16
 )
 
@@ -34,25 +26,30 @@ type Server struct {
 	cfg     *config.Config
 	matcher *matcher.Matcher
 	log     *logger.SyslogLogger
-	self    string // current SSH user
-	rrshBin string // path to this binary for elevation re-exec
+	user    string // current SSH user
+	rrsh    string // path to this binary for elevation re-exec
 	in      *bufio.Reader
 	out     io.Writer
 }
 
 // New constructs a Server. `self` is the current SSH user (what "self"
-// resolves to in `as:` lists). `rrshBin` is the path used to re-exec via
-// sudo for elevation.
-func New(cfg *config.Config, log *logger.SyslogLogger, self, rrshBin string, in io.Reader, out io.Writer) *Server {
+// resolves to in `as:` lists). The path to the running binary is
+// resolved internally via os.Executable() and used to re-exec under
+// sudo when a call needs elevation.
+func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader, out io.Writer) (*Server, error) {
+	rrsh, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve own executable path: %w", err)
+	}
 	return &Server{
 		cfg:     cfg,
 		matcher: matcher.New(cfg.Commands),
 		log:     log,
-		self:    self,
-		rrshBin: rrshBin,
+		user:    user,
+		rrsh:    rrsh,
 		in:      bufio.NewReaderSize(in, 1<<20),
 		out:     out,
-	}
+	}, nil
 }
 
 // Serve runs the read/dispatch/write loop until stdin closes. Errors at
@@ -177,8 +174,6 @@ func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError
 	switch method {
 	case "hello":
 		return s.handleHello()
-	case "list":
-		return s.handleList()
 	case "run":
 		return s.handleRun(params)
 	default:
@@ -191,17 +186,9 @@ func (s *Server) handleHello() (any, *rpcError) {
 	if name == "" {
 		name = "rrsh"
 	}
-	return &helloResult{
-		Name:         name,
-		Version:      Version,
-		Instructions: s.cfg.Instructions,
-	}, nil
-}
-
-func (s *Server) handleList() (any, *rpcError) {
-	out := make([]commandEntry, 0, len(s.cfg.Commands))
+	out := make([]*commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
-		entry := commandEntry{
+		entry := &commandEntry{
 			Command:     r.CommandSource,
 			As:          r.As,
 			Description: sanitizeDescription(r.Description),
@@ -211,12 +198,16 @@ func (s *Server) handleList() (any, *rpcError) {
 		}
 		out = append(out, entry)
 	}
-	return &listResult{Commands: out}, nil
+	return &helloResult{
+		Name:         name,
+		Instructions: s.cfg.Instructions,
+		Commands:     out,
+	}, nil
 }
 
 // handleRun requires exactly one of `argv` or `pipeline`. Matcher
 // denials surface as JSON-RPC errors (code errDenied) so the AI client
-// gets a clean signal — the child's own non-zero exit lives in
+// gets a clean signal - the child's own non-zero exit lives in
 // result.exit, not in the RPC error envelope.
 func (s *Server) handleRun(params json.RawMessage) (any, *rpcError) {
 	if len(params) == 0 {
@@ -234,20 +225,20 @@ func (s *Server) handleRun(params json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: errInvalidParams, Message: "run requires exactly one of argv or pipeline"}
 	}
 	if hasArgv {
-		return s.runSingle(p)
+		return s.runCommand(p)
 	}
 	return s.runPipeline(p)
 }
 
-// runSingle executes a single-argv run call.
-func (s *Server) runSingle(p runParams) (any, *rpcError) {
+// runCommand executes a single-argv run call.
+func (s *Server) runCommand(p runParams) (any, *rpcError) {
 	path := p.Argv[0]
 	argv := p.Argv[1:]
 
 	rule, ok := s.matcher.Match(path, argv)
 	if !ok {
 		input := joinForLog(path, argv)
-		s.log.Denied(input, s.self)
+		s.log.Denied(input, s.user)
 		return nil, deny("command not allowed: " + input)
 	}
 
@@ -255,11 +246,11 @@ func (s *Server) runSingle(p runParams) (any, *rpcError) {
 	if requested == "" {
 		requested = config.SelfUser
 	}
-	target := resolveTarget(requested, rule.As, s.self)
-	if target == "" {
+	user := resolveUser(requested, rule.As, s.user)
+	if user == "" {
 		input := joinForLog(path, argv)
-		s.log.Denied(input, s.self)
-		return nil, deny(fmt.Sprintf("%s not permitted to run as %s", input, displayTarget(requested, s.self)))
+		s.log.Denied(input, s.user)
+		return nil, deny(fmt.Sprintf("%s not permitted to run as %s", input, displayUser(requested, s.user)))
 	}
 
 	var stdin io.Reader
@@ -268,24 +259,24 @@ func (s *Server) runSingle(p runParams) (any, *rpcError) {
 	}
 
 	input := joinForLog(path, argv)
-	if target == s.self {
-		s.log.Allowed(input, s.self)
+	if user == s.user {
+		s.log.Allowed(input, s.user)
 		return toRunResult(exec.Execute(path, argv, rule, stdin)), nil
 	}
 
 	if !s.cfg.Sudo {
-		s.log.Denied(input, s.self)
+		s.log.Denied(input, s.user)
 		return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
 	}
 
-	s.log.Allowed(input, target)
-	return toRunResult(s.elevateAndExecute(target, path, argv, rule, stdin)), nil
+	s.log.Allowed(input, user)
+	return toRunResult(s.elevateAndExecute(user, path, argv, rule, stdin)), nil
 }
 
 // runPipeline executes a multi-stage pipeline.
 func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 	if p.As != "" {
-		return nil, &rpcError{Code: errInvalidParams, Message: "top-level `as` is not valid with pipeline — set `as` per stage"}
+		return nil, &rpcError{Code: errInvalidParams, Message: "top-level `as` is not valid with pipeline - set `as` per stage"}
 	}
 	if len(p.Pipeline) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
@@ -302,7 +293,7 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
 			input := joinForLog(path, argv)
-			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.self)
+			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.user)
 			return nil, deny("pipeline stage not allowed: " + input)
 		}
 
@@ -310,22 +301,22 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 		if requested == "" {
 			requested = config.SelfUser
 		}
-		target := resolveTarget(requested, rule.As, s.self)
-		if target == "" {
+		user := resolveUser(requested, rule.As, s.user)
+		if user == "" {
 			input := joinForLog(path, argv)
-			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.self)
-			return nil, deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayTarget(requested, s.self)))
+			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.user)
+			return nil, deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayUser(requested, s.user)))
 		}
 
 		// For elevation in a pipeline, rewrite the stage to invoke
 		// /usr/bin/sudo … rrsh sudo <path> <argv>. The privileged half
 		// re-validates from disk against the same rule's `as:` list.
-		if target != s.self {
+		if user != s.user {
 			if !s.cfg.Sudo {
-				s.log.Denied(s.fullPipelineLog(p.Pipeline), s.self)
+				s.log.Denied(s.fullPipelineLog(p.Pipeline), s.user)
 				return nil, deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)")
 			}
-			path, argv = s.buildElevatedArgv(target, path, argv)
+			path, argv = s.buildElevatedArgv(user, path, argv)
 		}
 
 		var stageStdin io.Reader
@@ -341,17 +332,17 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 		})
 	}
 
-	s.log.Allowed(s.fullPipelineLog(p.Pipeline), s.self)
+	s.log.Allowed(s.fullPipelineLog(p.Pipeline), s.user)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
 // elevateAndExecute re-execs the rrsh binary via /usr/bin/sudo to run the
-// command as `target`. The privileged half (cmd/sudo.go) reads its argv
+// command as `user`. The privileged half (cmd/sudo.go) reads its argv
 // directly from os.Args, re-loads config from disk, and re-validates the
 // rule's `as:` list before executing.
-func (s *Server) elevateAndExecute(target, path string, argv []string, rule *config.CommandRule, stdin io.Reader) *exec.Result {
-	sudoPath, sudoArgv := s.buildElevatedArgv(target, path, argv)
-	// Pretend the elevation is just another command — same executor
+func (s *Server) elevateAndExecute(user, path string, argv []string, rule *config.CommandRule, stdin io.Reader) *exec.Result {
+	sudoPath, sudoArgv := s.buildElevatedArgv(user, path, argv)
+	// Pretend the elevation is just another command - same executor
 	// semantics, same timeout.
 	return exec.Execute(sudoPath, sudoArgv, rule, stdin)
 }
@@ -359,33 +350,17 @@ func (s *Server) elevateAndExecute(target, path string, argv []string, rule *con
 // buildElevatedArgv produces (path, argv) suitable for exec.Execute to
 // spawn /usr/bin/sudo and re-enter rrsh's privileged half.
 //
-//	sudo -n [-u TARGET] /usr/bin/rrsh sudo <path> <argv...>
+//	sudo -n [-u USER] /usr/bin/rrsh sudo <path> <argv...>
 //
-// -u is omitted when target == "root" (sudo defaults to root).
-func (s *Server) buildElevatedArgv(target, path string, argv []string) (string, []string) {
+// -u is omitted when user == "root" (sudo defaults to root).
+func (s *Server) buildElevatedArgv(user, path string, argv []string) (string, []string) {
 	out := []string{"-n"}
-	if target != userRoot {
-		out = append(out, "-u", target)
+	if user != "root" {
+		out = append(out, "-u", user)
 	}
-	out = append(out, s.rrshBin, "sudo", path)
+	out = append(out, s.rrsh, "sudo", path)
 	out = append(out, argv...)
-	return sudoBinary, out
-}
-
-// toRunResult converts the executor's internal Result into the wire shape.
-func toRunResult(res *exec.Result) *runResult {
-	return &runResult{
-		Stdout:    safeUTF8(res.Stdout),
-		Stderr:    safeUTF8(res.Stderr),
-		Exit:      res.ExitCode,
-		TimedOut:  res.TimedOut,
-		Truncated: res.Truncated,
-	}
-}
-
-// deny builds the application-specific "denied" RPC error.
-func deny(msg string) *rpcError {
-	return &rpcError{Code: errDenied, Message: msg}
+	return "/usr/bin/sudo", out
 }
 
 // fullPipelineLog formats a pipeline as a single space-joined string for
@@ -402,86 +377,4 @@ func (s *Server) fullPipelineLog(stages []runStep) string {
 		parts[i] = joinForLog(path, rest)
 	}
 	return strings.Join(parts, " | ")
-}
-
-// logEscaper neutralizes record-terminator chars in argv so an attacker
-// can't forge fake ALLOWED/DENIED lines in syslog.
-var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
-
-// sanitizeDescription strips C0 controls + DEL from operator-authored
-// descriptions before list returns them — keeps stray ESC or BEL from
-// becoming terminal-injection in the AI client's UI. Tab and newline
-// survive so multi-line descriptions still render.
-func sanitizeDescription(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' {
-			return r
-		}
-		if r < 0x20 || r == 0x7F {
-			return -1 // drop
-		}
-		return r
-	}, s)
-}
-
-func joinForLog(path string, argv []string) string {
-	if len(argv) == 0 {
-		return logEscaper.Replace(path)
-	}
-	escaped := make([]string, len(argv))
-	for i, a := range argv {
-		escaped[i] = logEscaper.Replace(a)
-	}
-	return logEscaper.Replace(path) + " " + strings.Join(escaped, " ")
-}
-
-func errResponse(id json.RawMessage, code int, msg string) *response {
-	if id == nil {
-		id = json.RawMessage("null")
-	}
-	return &response{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &rpcError{Code: code, Message: msg},
-	}
-}
-
-// safeUTF8 replaces invalid UTF-8 with U+FFFD so arbitrary command
-// output (binary data, stray escapes) can be marshaled as JSON.
-func safeUTF8(b []byte) string {
-	if utf8.Valid(b) {
-		return string(b)
-	}
-	return strings.ToValidUTF8(string(b), "\uFFFD")
-}
-
-// resolveTarget returns the effective user a call should run as, or ""
-// to deny. "self" in requested or in the allowed list resolves to the
-// SSH user. A single-target rule implicitly elevates when the caller
-// didn't ask for a different user (the common "always root" case).
-func resolveTarget(requested string, allowed []string, self string) string {
-	if requested == config.SelfUser {
-		requested = self
-	}
-	var single string
-	for _, u := range allowed {
-		if u == config.SelfUser {
-			u = self
-		}
-		if u == requested {
-			return requested
-		}
-		single = u
-	}
-	if requested == self && len(allowed) == 1 {
-		return single
-	}
-	return ""
-}
-
-func displayTarget(requested, self string) string {
-	if requested == config.SelfUser {
-		return self
-	}
-	return requested
 }

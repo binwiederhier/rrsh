@@ -1,11 +1,3 @@
-// Package matcher validates (path, argv) against the allowlist.
-//
-// Each rule's CommandPatterns is a per-element regex list — index 0
-// matches the binary path, indices 1..N-1 match argv 1-for-1. The
-// per-element shape means ["foo bar"] (one element with a space) and
-// ["foo","bar"] (two elements) cannot be confused: the matcher counts
-// them separately, so a regex written for two args can't be fooled by
-// a single joined element.
 package matcher
 
 import (
@@ -47,11 +39,9 @@ func (m *Matcher) Match(path string, argv []string) (*config.CommandRule, bool) 
 func matches(path string, argv []string, rule *config.CommandRule) bool {
 	if len(rule.CommandPatterns) == 0 {
 		return false
-	}
-	if !rule.CommandPatterns[0].MatchString(path) {
+	} else if !rule.CommandPatterns[0].MatchString(path) {
 		return false
-	}
-	if len(argv) != len(rule.CommandPatterns)-1 {
+	} else if len(argv) != len(rule.CommandPatterns)-1 {
 		return false
 	}
 	for i, a := range argv {

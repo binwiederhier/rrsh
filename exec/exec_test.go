@@ -52,7 +52,7 @@ func TestExecute_PerRuleTimeout(t *testing.T) {
 	}
 }
 
-// Argv with embedded spaces — the structural fix that the rewrite enables.
+// Argv with embedded spaces - the structural fix that the rewrite enables.
 // Today's string-based path would have split "a b" into ["\"a", "b\""] (or
 // just split on whitespace, losing the grouping). With argv arrays, a
 // single string with an internal space stays a single arg.

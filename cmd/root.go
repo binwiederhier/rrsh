@@ -1,16 +1,9 @@
-// Package cmd is rrsh's CLI entry point and subcommand dispatcher.
-//
-// The dispatch is intentionally hand-rolled (no cobra) so the binary has no
-// external runtime dependencies — important for a security-critical tool
-// where every dependency is part of the trust boundary.
 package cmd
 
 import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/binwiederhier/rrsh/server"
 )
 
 const (
@@ -27,7 +20,6 @@ var versionInfo string
 // Execute is the entrypoint called from main.go.
 func Execute(version, commit, date string) {
 	versionInfo = fmt.Sprintf("rrsh %s (commit %s, built %s)", version, commit, date)
-	server.Version = version
 
 	args := os.Args[1:]
 	if len(args) > 0 {
@@ -39,31 +31,33 @@ func Execute(version, commit, date string) {
 			printUsage(os.Stdout)
 			return
 		case "-v", "-version", "--version":
-			fmt.Println(versionInfo)
+			printVersion(os.Stdout)
 			return
 		}
 	}
 	runServe(args)
 }
 
-const usageText = `rrsh — JSON-RPC server for AI-driven remote command execution
+func printVersion(w io.Writer) {
+	fmt.Fprintln(w, versionInfo)
+}
+
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, `rrsh - JSON-RPC server for AI-driven remote command execution
 
 Usage:
   rrsh                              read JSON-RPC requests from stdin (default)
   rrsh --config <file>              same, with explicit config path
   rrsh --help | --version
 
-Claude integration:
-  Mention "ssh -T <user>@<host>" in CLAUDE.md so the AI calls hello,
-  list, and run directly over SSH stdin.
+AI integration:
+  Mention "ssh -T <user>@<host>" in CLAUDE.md/AGENTS.md so the AI calls hello
+  (returns the full allowlist) and run directly over SSH stdin.
 
 Options:
-  --config <file>   config file (default: ` + defaultConfigPath + `,
-                    overridden by $` + envConfigPath + `)
+  --config <file>   config file (default: `+defaultConfigPath+`,
+                    overridden by $`+envConfigPath+`)
   --help            print this help
   --version         print version
-`
-
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, usageText)
+`)
 }

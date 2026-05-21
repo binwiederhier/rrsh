@@ -3,6 +3,7 @@ package cmd
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 
@@ -28,79 +29,130 @@ func runServe(args []string) {
 	)
 	if err := fs.Parse(args); err != nil {
 		os.Exit(exitGeneric)
-	}
-	if *showHelp {
+	} else if *showHelp {
 		printUsage(os.Stdout)
 		return
-	}
-	if *showVersion {
-		fmt.Println(versionInfo)
+	} else if *showVersion {
+		printVersion(os.Stdout)
 		return
-	}
-
-	if *commandFlag != "" || fs.NArg() > 0 || isTerminal(os.Stdin) {
-		printShellModeRejection(os.Stderr)
+	} else if *commandFlag != "" || fs.NArg() > 0 || isTerminal(os.Stdin) {
+		printShellHelp(os.Stderr)
 		os.Exit(exitGeneric)
 	}
 
-	// Every downstream security decision needs the current user; fail
-	// closed rather than guess if the lookup fails.
+	// Figure out user
 	u, err := user.Current()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
 		os.Exit(exitGeneric)
 	}
 
+	// Start syslog logger
 	log := logger.New(u.Username)
 	defer log.Close()
 
-	cfg, err := config.Load(resolveConfigPath(*configFile))
+	// Load config
+	conf, err := config.Load(resolveConfigPath(*configFile))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
 	}
 
-	rrshBin, err := os.Executable()
+	// Run JSON-RPC server
+	srv, err := server.New(conf, log, u.Username, os.Stdin, os.Stdout)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rrsh: cannot resolve own executable path: %v\n", err)
+		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
 	}
-
-	srv := server.New(cfg, log, u.Username, rrshBin, os.Stdin, os.Stdout)
 	if err := srv.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
 	}
 }
 
-// printShellModeRejection tells the caller (likely an AI trying
-// `ssh user@host whoami`) that rrsh is a JSON-RPC server and shows
-// enough to recover. Long-form on purpose: this is the breadcrumb that
-// turns a wrong first attempt into a working one.
-func printShellModeRejection(w *os.File) {
+func printShellHelp(w io.Writer) {
 	target := sshTargetHint()
-	fmt.Fprintf(w, `rrsh: this is a JSON-RPC server, not an interactive shell.
+	fmt.Fprintf(w, `rrsh: a JSON-RPC server for server diagnostics, not an interactive shell.
 
-Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Methods are:
-  - hello — host name, version, and instructions
-  - list  — every command this host permits
-  - run   — execute one command (argv) or a pipeline
+Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Two methods:
+  hello  - name, host-specific instructions, and the full allowlist
+  run    - execute one allowlisted command, or a pipeline of stages
 
-A typical first session looks like:
+Every response is wrapped in {"jsonrpc":"2.0","id":<your-id>, ...}. Errors
+(allowlist denial, elevation off, oversize input) come back as
+{"error":{"code":-32000,"message":"..."}}. A child's non-zero exit is NOT
+an error - it lives in result.exit alongside stdout, stderr, timed_out,
+and truncated. Always send a unique numeric "id" so you can correlate.
+
+1) Discover what this host permits. Call this ONCE up front (or whenever
+   you've forgotten the allowlist) - it is NOT required before every run,
+   just for initial discovery:
+
+  echo '{"jsonrpc":"2.0","id":1,"method":"hello"}' | ssh -T %[1]s
+
+   The result has {name, instructions, commands}. Read
+   "instructions" - it's host-specific guidance. Each entry in
+   "commands" has a regex list: command[0] matches argv[0] (the path),
+   command[i] matches argv[i]. len(argv) must equal len(command).
+   Once you know what's allowed, jump straight to "run" - no need to
+   resend "hello" for subsequent calls.
+
+2) Run one command as the SSH user (default):
+
+  echo '{"jsonrpc":"2.0","id":2,"method":"run",
+         "params":{"argv":["/usr/bin/whoami"]}}' | ssh -T %[1]s
+
+   Result: {"stdout":"...","stderr":"...","exit":0}
+
+3) Run as root. Requires the matched rule's "as" list to include "root"
+   AND the host config to have "sudo":true. If the rule's "as" list has
+   exactly one non-self user, you can OMIT "as" and rrsh auto-elevates
+   (the common "always root" case):
+
+  echo '{"jsonrpc":"2.0","id":3,"method":"run","params":{
+         "argv":["/usr/bin/journalctl","-u","ntfy","-n","100"],
+         "as":"root"}}' | ssh -T %[1]s
+
+4) Pipe data INTO a command (no shell involved - this is just a string
+   handed to the child's stdin):
+
+  echo '{"jsonrpc":"2.0","id":4,"method":"run","params":{
+         "argv":["/usr/bin/grep","-i","error"],
+         "stdin":"foo\nERROR: bar\nbaz\n"}}' | ssh -T %[1]s
+
+5) Pipeline - chain stages with the "pipeline" array. There is NO shell
+   anywhere in rrsh; "|" and ">" inside an argv element are literal
+   bytes, not metacharacters. Each stage is independently matched and
+   authorized. stdout of stage i feeds stdin of stage i+1. Per-stage
+   "as" lets an elevated stage feed an unprivileged filter:
+
+  echo '{"jsonrpc":"2.0","id":5,"method":"run","params":{"pipeline":[
+         {"argv":["/usr/bin/journalctl","-u","ntfy","-n","1000"],"as":"root"},
+         {"argv":["/usr/bin/grep","-i","error"]}
+       ]}}' | ssh -T %[1]s
+
+6) Batch multiple requests in one SSH session, one JSON object per line:
 
   printf '%%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"hello"}' \
-    '{"jsonrpc":"2.0","id":2,"method":"list"}' \
-    '{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/bin/echo","hi"]}}' \
-    | ssh -T %s
+    '{"jsonrpc":"2.0","id":2,"method":"run","params":{"argv":["/usr/bin/whoami"]}}' \
+    '{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/usr/bin/uptime"]}}' \
+    | ssh -T %[1]s
 
-The hello response carries an "instructions" field with host-specific
-guidance — read it first.
+Constraints:
+  - argv[0] must be an absolute path (start with "/").
+  - Per-command timeout is 30s unless the rule says otherwise; timeouts
+    return exit=124, timed_out=true.
+  - Stdout and stderr are each capped at 10 MiB; overflow is dropped and
+    truncated=true.
+  - Per-request line is capped at 1 MiB. Pipelines are capped at 16 stages.
+  - Use "ssh -T" (no PTY). Without it, ssh allocates a TTY and rrsh kicks
+    you back to this message instead of speaking JSON-RPC.
 `, target)
 }
 
 // sshTargetHint returns user@host for help text. Failures fall back to
-// generic placeholders — we're already exiting with an error and the
+// generic placeholders - we're already exiting with an error and the
 // example only needs to be copy-pasteable.
 func sshTargetHint() string {
 	username := "<user>"
@@ -115,7 +167,7 @@ func sshTargetHint() string {
 }
 
 // isTerminal returns true if f is connected to a terminal (i.e. a
-// character device). Uses the file's stat mode — no CGO, no external
+// character device). Uses the file's stat mode - no CGO, no external
 // dependency. False if Stat fails.
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()

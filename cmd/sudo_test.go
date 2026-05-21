@@ -6,7 +6,7 @@ import (
 )
 
 // TestJoinForLog_EscapesControlChars covers the log-injection mitigation
-// in the privileged half — argv with embedded newlines must not forge
+// in the privileged half - argv with embedded newlines must not forge
 // fake audit-log entries.
 func TestJoinForLog_EscapesControlChars(t *testing.T) {
 	t.Parallel()

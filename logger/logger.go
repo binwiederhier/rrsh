@@ -15,7 +15,7 @@ type SyslogLogger struct {
 }
 
 // New opens a connection to the local syslog daemon under facility
-// auth/info with tag "rrsh". The username is supplied by the caller —
+// auth/info with tag "rrsh". The username is supplied by the caller -
 // the logger deliberately does not perform its own user lookup so the
 // trust boundary stays at the entry-point (cmd/) layer. When the syslog
 // open fails (no syslog daemon running, sandboxed container, etc.), New
@@ -55,7 +55,7 @@ func (l *SyslogLogger) Close() error {
 	return l.w.Close()
 }
 
-// formatEvent omits the as= field when it equals the calling user — the
+// formatEvent omits the as= field when it equals the calling user - the
 // common no-elevation case stays uncluttered while elevated calls stand out.
 func formatEvent(kind, user, asUser, input string) string {
 	if asUser == "" || asUser == user {
