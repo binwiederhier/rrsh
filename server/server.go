@@ -1,4 +1,4 @@
-package mcp
+package server
 
 import (
 	"bufio"
@@ -28,43 +28,6 @@ const (
 	// maxPipelineStages caps processes spawned per pipeline (DoS guard).
 	maxPipelineStages = 16
 )
-
-// listCommandsSchema is the JSON Schema for list_commands (no inputs).
-var listCommandsSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
-
-// runCommandSchema is the JSON Schema for run_command's inputs.
-var runCommandSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "argv": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "Command + arguments as an argv slice. The first element must be an absolute path. Exactly one of argv or pipeline must be set."
-    },
-    "pipeline": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "argv": {"type": "array", "items": {"type": "string"}},
-          "as": {"type": "string"}
-        },
-        "required": ["argv"],
-        "additionalProperties": false
-      },
-      "description": "Multi-stage pipeline. Stdout of stage i is wired to stdin of stage i+1. Each stage is independently validated against the allowlist."
-    },
-    "as": {
-      "type": "string",
-      "description": "Run as this user (e.g. \"root\"). Must be permitted by the matched rule's as: list. Ignored when pipeline is set — use per-stage as there."
-    },
-    "stdin": {
-      "type": "string",
-      "description": "Optional data to pipe into stdin of the first (or only) stage."
-    }
-  },
-  "additionalProperties": false
-}`)
 
 // Server holds the dependencies needed to serve JSON-RPC requests.
 type Server struct {
@@ -212,70 +175,30 @@ func (s *Server) handle(data []byte) *response {
 // dispatch routes a parsed request to its handler.
 func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError) {
 	switch method {
-	case "initialize":
-		return s.handleInitialize(params)
-	case "tools/list":
-		return s.handleToolsList()
-	case "tools/call":
-		return s.handleToolsCall(params)
-	case "notifications/initialized", "notifications/cancelled":
-		// Accepted but no-op.
-		return nil, nil
-	case "ping":
-		return struct{}{}, nil
+	case "hello":
+		return s.handleHello()
+	case "list":
+		return s.handleList()
+	case "run":
+		return s.handleRun(params)
 	default:
 		return nil, &rpcError{Code: errMethodNotFound, Message: "method not found: " + method}
 	}
 }
 
-func (s *Server) handleInitialize(_ json.RawMessage) (any, *rpcError) {
+func (s *Server) handleHello() (any, *rpcError) {
 	name := s.cfg.Name
 	if name == "" {
 		name = "rrsh"
 	}
-	return &initializeResult{
-		ProtocolVersion: protocolVersion,
-		Capabilities:    serverCapabilities{Tools: &toolsCapability{}},
-		ServerInfo:      serverInfo{Name: name, Version: Version},
-		Instructions:    s.cfg.Instructions,
+	return &helloResult{
+		Name:         name,
+		Version:      Version,
+		Instructions: s.cfg.Instructions,
 	}, nil
 }
 
-func (s *Server) handleToolsList() (any, *rpcError) {
-	return &toolsListResult{
-		Tools: []toolDef{
-			{
-				Name:        "list_commands",
-				Description: "List every command rule this rrsh instance will allow. Returns a JSON array of {command, as, description, timeout_seconds}. `command` is a list of regexes: element 0 matches the binary path, elements 1..N-1 match argv elements. Your argv length must equal len(command)-1 AND each element must match its corresponding pattern. Multiple rules can share a command[0] regex to describe alternative argv shapes; the first matching rule wins. Call this first to discover what run_command can execute.",
-				InputSchema: listCommandsSchema,
-			},
-			{
-				Name:        "run_command",
-				Description: "Execute one allowlisted command, or chain several with a native pipeline (no shell involved). Pass `argv` as a string array (first element = absolute path), or pass `pipeline` as an array of {argv, as?} stages — stdout of stage N feeds stdin of stage N+1. Example pipeline: `[{\"argv\":[\"/usr/bin/cat\",\"/var/log/syslog\"]},{\"argv\":[\"/usr/bin/grep\",\"-i\",\"error\",\"/dev/stdin\"]}]`. Each rule's `command` list decides whether the call is accepted: element 0 must match the path, and remaining elements must match argv 1-for-1. Returns structured {stdout, stderr, exit, timed_out, truncated}.",
-				InputSchema: runCommandSchema,
-			},
-		},
-	}, nil
-}
-
-func (s *Server) handleToolsCall(params json.RawMessage) (any, *rpcError) {
-	var p toolsCallParams
-	dec := json.NewDecoder(bytes.NewReader(params))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&p); err != nil {
-		return nil, &rpcError{Code: errInvalidParams, Message: "invalid tools/call params: " + err.Error()}
-	}
-	switch p.Name {
-	case "list_commands":
-		return s.toolListCommands()
-	case "run_command":
-		return s.toolRunCommand(p.Arguments)
-	default:
-		return nil, &rpcError{Code: errInvalidParams, Message: "unknown tool: " + p.Name}
-	}
-}
-
-func (s *Server) toolListCommands() (any, *rpcError) {
+func (s *Server) handleList() (any, *rpcError) {
 	out := make([]commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
 		entry := commandEntry{
@@ -288,51 +211,47 @@ func (s *Server) toolListCommands() (any, *rpcError) {
 		}
 		out = append(out, entry)
 	}
-	jsonText, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return nil, &rpcError{Code: errInternal, Message: err.Error()}
-	}
-	return &toolsCallResult{Content: []contentBlock{{Type: "text", Text: string(jsonText)}}}, nil
+	return &listResult{Commands: out}, nil
 }
 
-// toolRunCommand requires exactly one of `argv` or `pipeline`. Matcher
-// denials surface as isError content (not transport-level RPC errors)
-// so the AI can iterate within one session.
-func (s *Server) toolRunCommand(args json.RawMessage) (any, *rpcError) {
-	if len(args) == 0 {
-		return nil, &rpcError{Code: errInvalidParams, Message: "run_command requires arguments"}
+// handleRun requires exactly one of `argv` or `pipeline`. Matcher
+// denials surface as JSON-RPC errors (code errDenied) so the AI client
+// gets a clean signal — the child's own non-zero exit lives in
+// result.exit, not in the RPC error envelope.
+func (s *Server) handleRun(params json.RawMessage) (any, *rpcError) {
+	if len(params) == 0 {
+		return nil, &rpcError{Code: errInvalidParams, Message: "run requires params"}
 	}
-	var a runCommandArgs
-	dec := json.NewDecoder(bytes.NewReader(args))
+	var p runParams
+	dec := json.NewDecoder(bytes.NewReader(params))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&a); err != nil {
-		return nil, &rpcError{Code: errInvalidParams, Message: "invalid run_command arguments: " + err.Error()}
+	if err := dec.Decode(&p); err != nil {
+		return nil, &rpcError{Code: errInvalidParams, Message: "invalid run params: " + err.Error()}
 	}
-	hasArgv := len(a.Argv) > 0
-	hasPipeline := len(a.Pipeline) > 0
+	hasArgv := len(p.Argv) > 0
+	hasPipeline := len(p.Pipeline) > 0
 	if hasArgv == hasPipeline {
-		return s.deny("run_command requires exactly one of argv or pipeline"), nil
+		return nil, &rpcError{Code: errInvalidParams, Message: "run requires exactly one of argv or pipeline"}
 	}
-
 	if hasArgv {
-		return s.runSingle(a)
+		return s.runSingle(p)
 	}
-	return s.runPipeline(a)
+	return s.runPipeline(p)
 }
 
-// runSingle executes a single-stage run_command call.
-func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
-	path := a.Argv[0]
-	argv := a.Argv[1:]
+// runSingle executes a single-argv run call.
+func (s *Server) runSingle(p runParams) (any, *rpcError) {
+	path := p.Argv[0]
+	argv := p.Argv[1:]
 
 	rule, ok := s.matcher.Match(path, argv)
 	if !ok {
 		input := joinForLog(path, argv)
 		s.log.Denied(input, s.self)
-		return s.deny("command not allowed: "+input), nil
+		return nil, deny("command not allowed: " + input)
 	}
 
-	requested := a.As
+	requested := p.As
 	if requested == "" {
 		requested = config.SelfUser
 	}
@@ -340,44 +259,42 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 	if target == "" {
 		input := joinForLog(path, argv)
 		s.log.Denied(input, s.self)
-		return s.deny(fmt.Sprintf("%s not permitted to run as %s", input, displayTarget(requested, s.self))), nil
+		return nil, deny(fmt.Sprintf("%s not permitted to run as %s", input, displayTarget(requested, s.self)))
 	}
 
 	var stdin io.Reader
-	if a.Stdin != "" {
-		stdin = strings.NewReader(a.Stdin)
+	if p.Stdin != "" {
+		stdin = strings.NewReader(p.Stdin)
 	}
 
 	input := joinForLog(path, argv)
 	if target == s.self {
 		s.log.Allowed(input, s.self)
-		res := exec.Execute(path, argv, rule, stdin)
-		return runResultToTool(res), nil
+		return toRunResult(exec.Execute(path, argv, rule, stdin)), nil
 	}
 
 	if !s.cfg.Sudo {
 		s.log.Denied(input, s.self)
-		return s.deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)"), nil
+		return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
 	}
 
 	s.log.Allowed(input, target)
-	res := s.elevateAndExecute(target, path, argv, rule, stdin)
-	return runResultToTool(res), nil
+	return toRunResult(s.elevateAndExecute(target, path, argv, rule, stdin)), nil
 }
 
 // runPipeline executes a multi-stage pipeline.
-func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
-	if a.As != "" {
-		return s.deny("top-level `as` is not valid with pipeline — set `as` per stage"), nil
+func (s *Server) runPipeline(p runParams) (any, *rpcError) {
+	if p.As != "" {
+		return nil, &rpcError{Code: errInvalidParams, Message: "top-level `as` is not valid with pipeline — set `as` per stage"}
 	}
-	if len(a.Pipeline) > maxPipelineStages {
-		return s.deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages)), nil
+	if len(p.Pipeline) > maxPipelineStages {
+		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
 
-	stages := make([]exec.Stage, 0, len(a.Pipeline))
-	for i, step := range a.Pipeline {
+	stages := make([]exec.Stage, 0, len(p.Pipeline))
+	for i, step := range p.Pipeline {
 		if len(step.Argv) == 0 {
-			return s.deny(fmt.Sprintf("pipeline stage %d has empty argv", i)), nil
+			return nil, &rpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty argv", i)}
 		}
 		path := step.Argv[0]
 		argv := step.Argv[1:]
@@ -385,8 +302,8 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
 			input := joinForLog(path, argv)
-			s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
-			return s.deny("pipeline stage not allowed: "+input), nil
+			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.self)
+			return nil, deny("pipeline stage not allowed: " + input)
 		}
 
 		requested := step.As
@@ -396,8 +313,8 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		target := resolveTarget(requested, rule.As, s.self)
 		if target == "" {
 			input := joinForLog(path, argv)
-			s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
-			return s.deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayTarget(requested, s.self))), nil
+			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.self)
+			return nil, deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayTarget(requested, s.self)))
 		}
 
 		// For elevation in a pipeline, rewrite the stage to invoke
@@ -405,15 +322,15 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		// re-validates from disk against the same rule's `as:` list.
 		if target != s.self {
 			if !s.cfg.Sudo {
-				s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
-				return s.deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)"), nil
+				s.log.Denied(s.fullPipelineLog(p.Pipeline), s.self)
+				return nil, deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)")
 			}
 			path, argv = s.buildElevatedArgv(target, path, argv)
 		}
 
 		var stageStdin io.Reader
-		if i == 0 && a.Stdin != "" {
-			stageStdin = strings.NewReader(a.Stdin)
+		if i == 0 && p.Stdin != "" {
+			stageStdin = strings.NewReader(p.Stdin)
 		}
 
 		stages = append(stages, exec.Stage{
@@ -424,9 +341,8 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		})
 	}
 
-	s.log.Allowed(s.fullPipelineLog(a.Pipeline), s.self)
-	res := exec.ExecutePipeline(stages)
-	return runResultToTool(res), nil
+	s.log.Allowed(s.fullPipelineLog(p.Pipeline), s.self)
+	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
 // elevateAndExecute re-execs the rrsh binary via /usr/bin/sudo to run the
@@ -456,34 +372,20 @@ func (s *Server) buildElevatedArgv(target, path string, argv []string) (string, 
 	return sudoBinary, out
 }
 
-// runResultToTool wraps an exec.Result into the MCP tool response.
-func runResultToTool(res *exec.Result) *toolsCallResult {
-	payload := runCommandOutput{
+// toRunResult converts the executor's internal Result into the wire shape.
+func toRunResult(res *exec.Result) *runResult {
+	return &runResult{
 		Stdout:    safeUTF8(res.Stdout),
 		Stderr:    safeUTF8(res.Stderr),
 		Exit:      res.ExitCode,
 		TimedOut:  res.TimedOut,
 		Truncated: res.Truncated,
 	}
-	text, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return &toolsCallResult{
-			Content: []contentBlock{{Type: "text", Text: "rrsh: internal: " + err.Error()}},
-			IsError: true,
-		}
-	}
-	return &toolsCallResult{
-		Content: []contentBlock{{Type: "text", Text: string(text)}},
-		IsError: res.ExitCode != 0,
-	}
 }
 
-// deny returns a tools/call error result with the given reason.
-func (s *Server) deny(msg string) *toolsCallResult {
-	return &toolsCallResult{
-		Content: []contentBlock{{Type: "text", Text: "rrsh: " + msg}},
-		IsError: true,
-	}
+// deny builds the application-specific "denied" RPC error.
+func deny(msg string) *rpcError {
+	return &rpcError{Code: errDenied, Message: msg}
 }
 
 // fullPipelineLog formats a pipeline as a single space-joined string for
@@ -507,9 +409,9 @@ func (s *Server) fullPipelineLog(stages []runStep) string {
 var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
 
 // sanitizeDescription strips C0 controls + DEL from operator-authored
-// descriptions before list_commands returns them — keeps stray ESC or
-// BEL from becoming terminal-injection in the AI client's UI. Tab and
-// newline survive so multi-line descriptions still render.
+// descriptions before list returns them — keeps stray ESC or BEL from
+// becoming terminal-injection in the AI client's UI. Tab and newline
+// survive so multi-line descriptions still render.
 func sanitizeDescription(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
@@ -583,4 +485,3 @@ func displayTarget(requested, self string) string {
 	}
 	return requested
 }
-

@@ -10,7 +10,7 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 
 - Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
-- Two MCP tools are exposed: `list_commands` (describes what is allowed, including per-rule `description` strings) and `run_command` (executes one command or a pipeline of them).
+- Three methods are exposed: `hello` (host name, version, instructions), `list` (the allowlist), and `run` (executes one command or a pipeline of them).
 - Arguments are passed as a real `argv` array — quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
 - Commands are matched against `/etc/rrsh/rrsh.json` rules (override with `--config=` or `$RRSH_CONFIG`). Each rule is a list of regexes — element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 — plus an optional per-command timeout and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
@@ -59,28 +59,11 @@ The home dir is intentionally root-owned: the `rrsh` user cannot modify its own 
 
 ## Connect from Claude
 
-Two patterns. Pick one based on whether you want the host registered up front, or want any session to be able to dial in ad-hoc.
+Just tell Claude how to reach the host. No MCP registration, no client-side config — Claude SSHs ad-hoc using its bash tool. Drop a one-liner into the session or your `CLAUDE.md`:
 
-**A. Register as an MCP server** (transport is `ssh -T`, no port, no daemon):
+> You can diagnose this host via `ssh -T rrsh@prod.example.com`. It speaks newline-delimited JSON-RPC 2.0 over stdin: call `hello` first to read host-specific instructions, then `list` for the allowed commands, then `run`.
 
-```bash
-claude mcp add rrsh-prod -- ssh -T rrsh@prod.example.com
-```
-
-In a Claude session, the two tools (`list_commands`, `run_command`) become available. Claude is expected to call `list_commands` first to discover what is permitted, then construct `run_command` calls with a structured `argv` slice. The MCP `initialize` response also includes any host-specific `instructions` you set in the config (see [Configuration](#configuration)).
-
-**B. Drop a one-liner into the session** ("you can diagnose this host via `ssh rrsh@prod.example.com`"). No MCP registration. Claude SSHs ad-hoc using its bash tool. The first time Claude tries `ssh rrsh@prod.example.com whoami`, it gets an instructive rejection that explains how to send JSON-RPC requests:
-
-```
-rrsh: this is a JSON-RPC server, not an interactive shell.
-
-To use it, send newline-delimited JSON-RPC 2.0 requests over SSH stdin:
-  echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-    | ssh -T rrsh@prod.example.com
-…
-```
-
-From there Claude calls `initialize`, reads the `instructions` field for host context, and proceeds. This pattern scales to N hosts without N MCP config entries — the discoverability is in the protocol, not in your config.
+The first time Claude tries something shell-shaped like `ssh rrsh@prod.example.com whoami`, rrsh refuses with an instructive message that shows the right shape. From there Claude calls `hello`, reads the `instructions` field for host context, and proceeds. This scales to N hosts without N client-side entries — the discoverability is in the protocol, not in your config.
 
 ## Configuration
 
@@ -89,7 +72,7 @@ From there Claude calls `initialize`, reads the `instructions` field for host co
 ```json
 {
   "name": "ntfy-prod-1",
-  "instructions": "You are on the ntfy production server. Use list_commands to see what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
+  "instructions": "You are on the ntfy production server. Call `list` to see what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
   "sudo": true,
   "commands": [
     { "command": ["/usr/bin/whoami"],
@@ -114,9 +97,9 @@ Top-level fields:
 
 | Field          | Default     | Meaning                                                                                                       |
 | -------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `name`         | `"rrsh"`    | Reported in MCP `serverInfo.name`. Useful for identifying which host Claude is connected to.                  |
-| `instructions` | empty       | Returned in MCP `initialize.instructions` — the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
-| `sudo`         | `false`     | Master switch for elevation. When `false`, every `run_command` whose target user differs from the SSH user is denied, and the privileged `rrsh sudo` subcommand refuses to run — even if `/etc/sudoers.d/rrsh` is in place. Must be `true` to use any rule whose `as:` list includes a non-self user. |
+| `name`         | `"rrsh"`    | Reported in `hello.name`. Useful for identifying which host Claude is connected to.                           |
+| `instructions` | empty       | Returned in `hello.instructions` — the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
+| `sudo`         | `false`     | Master switch for elevation. When `false`, every `run` whose target user differs from the SSH user is denied, and the privileged `rrsh sudo` subcommand refuses to run — even if `/etc/sudoers.d/rrsh` is in place. Must be `true` to use any rule whose `as:` list includes a non-self user. |
 | `commands`     | required    | Array of allowlist rules.                                                                                     |
 
 There is no top-level `timeout`. Every command runs with a fixed 30-second deadline unless its rule sets its own `timeout`. Letting operators raise the global timeout would silently let runaway commands hold the JSON-RPC channel hostage; per-rule overrides preserve that guardrail while letting genuinely long-running diagnostics (e.g. `ping -c 100 host`) opt out.
@@ -128,7 +111,7 @@ Fields on each command entry:
 | `command`     | required      | List of regexes (length ≥ 1). Element 0 matches the binary path; elements 1..N-1 match argv 1-for-1. A call passes only if path matches command[0] AND argv has exactly `len(command)-1` elements AND every argv[i] matches command[i+1]. Patterns are auto-anchored. |
 | `timeout`     | `"30s"`       | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
 | `as`          | `["self"]`    | Users the command may run as. `self` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
-| `description` | empty         | Free-text shown to Claude via `list_commands`. Treat it like an API doc string. Control characters are stripped before being sent. |
+| `description` | empty         | Free-text shown to Claude via `list`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
 Rules:
 
@@ -139,13 +122,27 @@ Rules:
 - **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected — typos in the config fail fast rather than silently weakening the policy.
 
-## The two MCP tools
+## Wire format
 
-### `list_commands`
+Plain JSON-RPC 2.0 over NDJSON. Send one request per line on stdin, get one response per line on stdout. Three methods, no notifications required, no initialize handshake.
 
-No arguments. Returns the rule set as a JSON document inside the MCP text content. Each entry has `command` (the operator-authored regex list: element 0 is the path regex, elements 1..N-1 are argv regexes), `as`, `description`, and `timeout_seconds` (omitted when none). Claude calls this to learn what is allowed.
+```text
+{"jsonrpc":"2.0","id":1,"method":"hello"}
+{"jsonrpc":"2.0","id":2,"method":"list"}
+{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/usr/bin/whoami"]}}
+```
 
-### `run_command`
+Server-side refusals (matcher denial, elevation disabled, oversize pipeline) come back as the JSON-RPC `error` envelope with application code `-32000`. A child process's own non-zero exit is **not** an RPC error — it lives in `result.exit`.
+
+### `hello`
+
+No params. Returns `{name, version, instructions}`. `instructions` is the host-specific guidance an operator put in the config — Claude should read it first.
+
+### `list`
+
+No params. Returns `{commands: [{command, as, description?, timeout_seconds?}]}`. `command` is the operator-authored regex list (element 0 = path regex, elements 1..N-1 = argv regexes).
+
+### `run`
 
 Executes one allowlisted command, or a pipeline of them. Exactly one of `argv` or `pipeline` must be set.
 
@@ -153,8 +150,10 @@ Executes one allowlisted command, or a pipeline of them. Exactly one of `argv` o
 
 ```json
 {
-  "name": "run_command",
-  "arguments": {
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "run",
+  "params": {
     "argv": ["/usr/bin/journalctl", "-u", "ntfy", "-n", "100"],
     "as": "root",
     "stdin": "optional input"
@@ -166,8 +165,10 @@ Executes one allowlisted command, or a pipeline of them. Exactly one of `argv` o
 
 ```json
 {
-  "name": "run_command",
-  "arguments": {
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "run",
+  "params": {
     "pipeline": [
       { "argv": ["/usr/bin/journalctl", "-u", "ntfy", "-n", "1000"], "as": "root" },
       { "argv": ["/usr/bin/grep", "ERROR"] }
@@ -180,7 +181,7 @@ Each stage is independently matched against the allowlist and authorized for its
 
 The pipeline field is the only way to compose commands — there is no shell, so the user-typed `|` and `>` characters have no meaning anywhere in rrsh. If your config allows `cat` and `grep` separately, the AI gets `cat /var/log/foo | grep error` by sending a two-stage `pipeline` array. There is no quoting concern: a literal pipe character inside an argument value (e.g. `grep "|"`) is just a byte in an argv element, not a metacharacter.
 
-**Return value:** structured JSON inside the MCP text content:
+**Return value:** structured JSON in the `result` field:
 
 ```json
 { "stdout": "...", "stderr": "...", "exit": 0, "timed_out": false, "truncated": false }
@@ -189,18 +190,17 @@ The pipeline field is the only way to compose commands — there is no shell, so
 - Stdout and stderr are captured separately. They are returned as UTF-8 strings, with invalid bytes replaced by U+FFFD.
 - Each stream is capped at 10 MB; further bytes are dropped and `truncated: true` is set.
 - Exit code is the child's exit (or last stage's exit for a pipeline). Timeouts return exit `124` with `timed_out: true`.
-- `isError: true` is set on the MCP envelope when the call was denied **or** when the exit code is non-zero, so Claude can short-circuit on either.
 
 ## Elevation
 
-When a rule's `as` list contains a user other than `self`, Claude can request that target by passing `"as": "<user>"` on the `run_command` call (or per-stage in a pipeline):
+When a rule's `as` list contains a user other than `self`, Claude can request that target by passing `"as": "<user>"` on the `run` call (or per-stage in a pipeline):
 
-| Tool call                                                  | Resolves to                                       |
-| ---------------------------------------------------------- | ------------------------------------------------- |
-| `run_command({argv: [...]})`                               | run as the SSH user (default)                     |
-| `run_command({argv: [...], as: "root"})`                   | run as `root` (if `root` is in the rule's `as`)   |
-| `run_command({argv: [...], as: "deploy"})`                 | run as `deploy`                                   |
-| `run_command({argv: ["/bin/systemctl","restart","ntfy"]})` | implicit `root` for single-target rules           |
+| `run` params                                       | Resolves to                                       |
+| -------------------------------------------------- | ------------------------------------------------- |
+| `{argv: [...]}`                                    | run as the SSH user (default)                     |
+| `{argv: [...], as: "root"}`                        | run as `root` (if `root` is in the rule's `as`)   |
+| `{argv: [...], as: "deploy"}`                      | run as `deploy`                                   |
+| `{argv: ["/bin/systemctl","restart","ntfy"]}`      | implicit `root` for single-target rules           |
 
 For rules whose `as` list contains exactly one non-self target, Claude does not need to pass `as` — rrsh implicitly elevates. This is the common "always root" case.
 
@@ -212,7 +212,7 @@ Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege tr
    ```
    To allow other target users (e.g. `deploy`), edit the `(...)` part to list every target user that appears in any rule's `as:` list. The file is a conffile, so upgrades won't clobber your changes.
 
-2. **The config-level `sudo` flag**, default `false`. Until you set `"sudo": true` at the top of `/etc/rrsh/rrsh.json`, the package's sudoers grant has no effect: the MCP server denies elevated calls with a clear error, and the privileged `rrsh sudo` half exits before running anything.
+2. **The config-level `sudo` flag**, default `false`. Until you set `"sudo": true` at the top of `/etc/rrsh/rrsh.json`, the package's sudoers grant has no effect: the JSON-RPC server denies elevated calls with a clear error, and the privileged `rrsh sudo` half exits before running anything.
 
 The privileged half (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the command against the rule's `as` list before executing — it never trusts its caller, does no flag parsing, and takes the originating user from `$SUDO_USER`.
 
@@ -236,9 +236,9 @@ The `as=` field is present only when the executing user differs from the SSH use
 
 SSH joins the client's arguments into a single string before sshd ever sees them, so a restricted shell that reads `-c "..."` is fundamentally a string parser. Quoting, embedded spaces, and metacharacters become parser concerns — and any parser bug is on the privileged trust boundary.
 
-rrsh used to be a string parser. It isn't any more. With JSON-RPC, every argument arrives in its own array slot, so input like `grep " | > /dev/null"` is unambiguous: the literal pipe-and-redirect string is one element in `argv`, not a shell metacharacter. The matcher is a regex over the joined form; the executor invokes the binary with the original slice. No tokenization layer to write or audit.
+rrsh used to be a string parser. It isn't any more. With JSON-RPC, every argument arrives in its own array slot, so input like `grep " | > /dev/null"` is unambiguous: the literal pipe-and-redirect string is one element in `argv`, not a shell metacharacter. The matcher is a per-element regex list; the executor invokes the binary with the original slice. No tokenization layer to write or audit.
 
-If you need a human-friendly CLI on top of this, write one in your client (it can call `run_command` directly). rrsh's job is to be a safe, structured endpoint.
+If you need a human-friendly CLI on top of this, write one in your client (it can call `run` directly). rrsh's job is to be a safe, structured endpoint.
 
 ## Build from source
 

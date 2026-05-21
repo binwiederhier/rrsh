@@ -10,7 +10,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/binwiederhier/rrsh/mcp"
+	"github.com/binwiederhier/rrsh/server"
 )
 
 const (
@@ -27,7 +27,7 @@ var versionInfo string
 // Execute is the entrypoint called from main.go.
 func Execute(version, commit, date string) {
 	versionInfo = fmt.Sprintf("rrsh %s (commit %s, built %s)", version, commit, date)
-	mcp.Version = version
+	server.Version = version
 
 	args := os.Args[1:]
 	if len(args) > 0 {
@@ -54,7 +54,8 @@ Usage:
   rrsh --help | --version
 
 Claude integration:
-  claude mcp add rrsh-prod -- ssh -T <user>@<host>
+  Mention "ssh -T <user>@<host>" in CLAUDE.md so the AI calls hello,
+  list, and run directly over SSH stdin.
 
 Options:
   --config <file>   config file (default: ` + defaultConfigPath + `,

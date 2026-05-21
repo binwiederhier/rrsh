@@ -8,7 +8,7 @@ import (
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/logger"
-	"github.com/binwiederhier/rrsh/mcp"
+	"github.com/binwiederhier/rrsh/server"
 )
 
 // runServe is the default code path: a JSON-RPC server over stdin/stdout.
@@ -66,7 +66,7 @@ func runServe(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	srv := mcp.New(cfg, log, u.Username, rrshBin, os.Stdin, os.Stdout)
+	srv := server.New(cfg, log, u.Username, rrshBin, os.Stdin, os.Stdout)
 	if err := srv.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
@@ -81,18 +81,20 @@ func printShellModeRejection(w *os.File) {
 	target := sshTargetHint()
 	fmt.Fprintf(w, `rrsh: this is a JSON-RPC server, not an interactive shell.
 
-Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Tools are:
-  - list_commands — describes what this host permits
-  - run_command   — runs one command or a pipeline
+Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Methods are:
+  - hello — host name, version, and instructions
+  - list  — every command this host permits
+  - run   — execute one command (argv) or a pipeline
 
 A typical first session looks like:
 
   printf '%%s\n' \
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ai","version":"0"}}}' \
-    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_commands","arguments":{}}}' \
+    '{"jsonrpc":"2.0","id":1,"method":"hello"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"list"}' \
+    '{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/bin/echo","hi"]}}' \
     | ssh -T %s
 
-The initialize response carries an "instructions" field with host-specific
+The hello response carries an "instructions" field with host-specific
 guidance — read it first.
 `, target)
 }
