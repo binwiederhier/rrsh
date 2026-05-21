@@ -65,20 +65,22 @@
     },
     {
       "command": ["/usr/bin/du", "-sh", "/var/log(/[^./][^/]*)*"],
-      "description": "Summarize disk usage under /var/log (or a subpath that does not start with `.`). Blocks `..` traversal."
+      "as": ["root"],
+      "description": "Summarize disk usage under /var/log (or a subpath that does not start with `.`). Runs as root so it can traverse mode-750 log subdirs (e.g. /var/log/private). Blocks `..` traversal."
     },
     {
       "command": ["/usr/bin/du", "-sh", "/var/lib(/[^./][^/]*)*"],
+      "as": ["root"],
       "timeout": "60s",
-      "description": "Summarize disk usage under /var/lib (or a subpath that does not start with `.`). Useful for finding which app's data dir is filling the disk (e.g. /var/lib/ntfy, /var/lib/postgresql). Recursive on large trees; allow up to 60s."
+      "description": "Summarize disk usage under /var/lib (or a subpath that does not start with `.`). Runs as root so it can traverse mode-700 app data dirs (e.g. /var/lib/ntfy). Recursive on large trees; allow up to 60s."
     },
     {
       "command": ["/usr/bin/lsblk"],
       "description": "List block devices."
     },
     {
-      "command": ["/usr/sbin/ip", "(addr|route|link)"],
-      "description": "Show network state (one-word subcommands): addr, route, link."
+      "command": ["/(usr/sbin|usr/bin|sbin|bin)/ip", "(addr|route|link)"],
+      "description": "Show network state (one-word subcommands): addr, route, link. Accepts any of the standard `ip` binary paths so the call works regardless of usrmerge / distro layout."
     },
     {
       "command": ["/usr/bin/ss", "-(t|u|tu)lnp"],
@@ -209,7 +211,13 @@
     },
     {
       "command": ["/usr/bin/ls", "-la?h?", "/var/log(/[^./][^/]*)*"],
-      "description": "List /var/log or a subpath. `-l[a][h]` for the flag, blocks `..` in the path."
+      "as": ["root"],
+      "description": "List /var/log or a subpath. Runs as root to peek into mode-750 subdirs. Blocks `..` in the path."
+    },
+    {
+      "command": ["/usr/bin/ls", "-la?h?", "/var/lib(/[^./][^/]*)*"],
+      "as": ["root"],
+      "description": "List /var/lib or a subpath. Runs as root to peek into mode-700 app data dirs (e.g. /var/lib/ntfy). Blocks `..` in the path."
     },
     {
       "command": ["/usr/bin/ls", "-la?h?", "/etc/cron\\.(d|hourly|daily|weekly|monthly)(/[^./][^/]*)*"],
