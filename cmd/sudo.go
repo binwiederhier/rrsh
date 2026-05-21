@@ -4,21 +4,16 @@ import (
 	"fmt"
 	"os"
 	"os/user"
-	"strings"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
+	"github.com/binwiederhier/rrsh/util"
 )
 
 // envSudoUser is the env var sudo sets to the original invoking user.
 const envSudoUser = "SUDO_USER"
-
-// logEscaper neutralizes characters that syslog could interpret as
-// record terminators - argv with embedded newlines must not forge fake
-// audit-log entries.
-var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
 
 // runSudo is the privileged half of rrsh's elevation flow, invoked as
 //
@@ -61,7 +56,7 @@ func runSudo(args []string) {
 
 	path := args[0]
 	argv := args[1:]
-	input := joinForLog(path, argv)
+	input := util.JoinForLog(path, argv)
 
 	// origin = who asked for elevation. Falls back to me when invoked
 	// without /usr/bin/sudo in front (no real elevation happened).
@@ -102,15 +97,4 @@ func runSudo(args []string) {
 	os.Stdout.Write(res.Stdout)
 	os.Stderr.Write(res.Stderr)
 	os.Exit(res.ExitCode)
-}
-
-func joinForLog(path string, argv []string) string {
-	if len(argv) == 0 {
-		return logEscaper.Replace(path)
-	}
-	escaped := make([]string, len(argv))
-	for i, a := range argv {
-		escaped[i] = logEscaper.Replace(a)
-	}
-	return logEscaper.Replace(path) + " " + strings.Join(escaped, " ")
 }

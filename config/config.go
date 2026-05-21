@@ -31,14 +31,12 @@ type CommandRule struct {
 // Sudo is the master switch for elevation: even with the sudoers grant
 // in place, every `as:`-other-than-self call is denied until Sudo=true.
 type Config struct {
-	Name         string
 	Instructions string
 	Sudo         bool
 	Commands     []CommandRule
 }
 
 type rawConfig struct {
-	Name         string    `json:"name"`
 	Instructions string    `json:"instructions"`
 	Sudo         bool      `json:"sudo"`
 	Commands     []rawRule `json:"commands"`
@@ -69,9 +67,9 @@ func Parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 	cfg := &Config{
-		Name:         raw.Name,
 		Instructions: raw.Instructions,
 		Sudo:         raw.Sudo,
+		Commands:     make([]CommandRule, 0, len(raw.Commands)),
 	}
 	for i, r := range raw.Commands {
 		rule, err := convertRule(r)

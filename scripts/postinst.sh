@@ -8,9 +8,11 @@ set -e
 #      and /var/lib/rrsh as its home directory. The home dir is
 #      package-owned (ships with an empty .hushlogin so sshd doesn't
 #      prepend its motd/last-login banner to the JSON-RPC stdout).
-#      The operator drops their authorized_keys under it.
 #   3. Lock the password (this account is SSH-key-only).
-#   4. Validate the freshly-installed sudoers snippet with visudo.
+#   4. Create /var/lib/rrsh/.ssh root-owned so the operator can drop in
+#      authorized_keys without an extra `install -d` step. The rrsh user
+#      cannot modify its own authorized_keys.
+#   5. Validate the freshly-installed sudoers snippet with visudo.
 
 RRSH_HOME=/var/lib/rrsh
 
@@ -32,7 +34,10 @@ if [ "$1" = "configure" ] || [ "$1" -ge 1 ]; then
     usermod --home "$RRSH_HOME" --shell /usr/bin/rrsh rrsh || true
   fi
 
-  # 4. Validate the sudoers snippet. If visudo rejects it, remove it
+  # 4. Create .ssh root-owned, mode 755 (sshd just needs to read).
+  install -d -m 755 -o root -g root "$RRSH_HOME/.ssh"
+
+  # 5. Validate the sudoers snippet. If visudo rejects it, remove it
   # rather than leaving a broken sudoers state on the host.
   if [ -f /etc/sudoers.d/rrsh ]; then
     chmod 0440 /etc/sudoers.d/rrsh || true

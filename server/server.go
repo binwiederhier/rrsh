@@ -14,6 +14,7 @@ import (
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
+	"github.com/binwiederhier/rrsh/util"
 )
 
 const (
@@ -47,7 +48,7 @@ func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader
 		log:     log,
 		user:    user,
 		rrsh:    rrsh,
-		in:      bufio.NewReaderSize(in, 1<<20),
+		in:      bufio.NewReaderSize(in, maxRequestBytes),
 		out:     out,
 	}, nil
 }
@@ -59,17 +60,13 @@ func (s *Server) Serve() error {
 	enc := json.NewEncoder(s.out)
 	for {
 		line, tooLong, err := s.readLine()
-		atEOF := errors.Is(err, io.EOF)
-		if atEOF && len(line) == 0 {
+		eof := errors.Is(err, io.EOF)
+		if err != nil && !eof {
+			return err
+		} else if eof && len(line) == 0 {
 			return nil
 		}
-		if err != nil && !atEOF {
-			return err
-		}
 		if tooLong {
-			// Surface as a JSON-RPC error rather than a transport
-			// failure, then keep serving (the offending line is already
-			// discarded by readLine).
 			tooLongResp := errResponse(nil, errParse, fmt.Sprintf("request exceeds %d-byte limit", maxRequestBytes))
 			if err := enc.Encode(tooLongResp); err != nil {
 				return err
@@ -77,18 +74,17 @@ func (s *Server) Serve() error {
 			continue
 		}
 		if len(bytes.TrimSpace(line)) == 0 {
-			if atEOF {
+			if eof {
 				return nil
 			}
 			continue
 		}
-		resp := s.handle(line)
-		if resp != nil {
+		if resp := s.handle(line); resp != nil {
 			if err := enc.Encode(resp); err != nil {
 				return err
 			}
 		}
-		if atEOF {
+		if eof {
 			return nil
 		}
 	}
@@ -149,21 +145,17 @@ func (s *Server) handle(data []byte) *response {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		return errResponse(nil, errParse, "parse error: "+err.Error())
-	}
-	if req.JSONRPC != "2.0" {
+	} else if req.JSONRPC != "2.0" {
 		return errResponse(req.ID, errInvalidRequest, "jsonrpc must be \"2.0\"")
-	}
-	if req.Method == "" {
+	} else if req.Method == "" {
 		return errResponse(req.ID, errInvalidRequest, "method is required")
 	}
 	// Notifications have no ID and never get a reply.
 	isNotification := len(req.ID) == 0
-
 	result, rpcErr := s.dispatch(req.Method, req.Params)
 	if isNotification {
 		return nil
-	}
-	if rpcErr != nil {
+	} else if rpcErr != nil {
 		return &response{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
 	}
 	return &response{JSONRPC: "2.0", ID: req.ID, Result: result}
@@ -182,10 +174,6 @@ func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError
 }
 
 func (s *Server) handleHello() (any, *rpcError) {
-	name := s.cfg.Name
-	if name == "" {
-		name = "rrsh"
-	}
 	out := make([]*commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
 		entry := &commandEntry{
@@ -199,7 +187,6 @@ func (s *Server) handleHello() (any, *rpcError) {
 		out = append(out, entry)
 	}
 	return &helloResult{
-		Name:         name,
 		Instructions: s.cfg.Instructions,
 		Commands:     out,
 	}, nil
@@ -223,8 +210,7 @@ func (s *Server) handleRun(params json.RawMessage) (any, *rpcError) {
 	hasPipeline := len(p.Pipeline) > 0
 	if hasArgv == hasPipeline {
 		return nil, &rpcError{Code: errInvalidParams, Message: "run requires exactly one of argv or pipeline"}
-	}
-	if hasArgv {
+	} else if hasArgv {
 		return s.runCommand(p)
 	}
 	return s.runPipeline(p)
@@ -237,7 +223,7 @@ func (s *Server) runCommand(p runParams) (any, *rpcError) {
 
 	rule, ok := s.matcher.Match(path, argv)
 	if !ok {
-		input := joinForLog(path, argv)
+		input := util.JoinForLog(path, argv)
 		s.log.Denied(input, s.user)
 		return nil, deny("command not allowed: " + input)
 	}
@@ -248,7 +234,7 @@ func (s *Server) runCommand(p runParams) (any, *rpcError) {
 	}
 	user := resolveUser(requested, rule.As, s.user)
 	if user == "" {
-		input := joinForLog(path, argv)
+		input := util.JoinForLog(path, argv)
 		s.log.Denied(input, s.user)
 		return nil, deny(fmt.Sprintf("%s not permitted to run as %s", input, displayUser(requested, s.user)))
 	}
@@ -258,7 +244,7 @@ func (s *Server) runCommand(p runParams) (any, *rpcError) {
 		stdin = strings.NewReader(p.Stdin)
 	}
 
-	input := joinForLog(path, argv)
+	input := util.JoinForLog(path, argv)
 	if user == s.user {
 		s.log.Allowed(input, s.user)
 		return toRunResult(exec.Execute(path, argv, rule, stdin)), nil
@@ -281,7 +267,7 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 	if len(p.Pipeline) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
-
+	pipelineLog := s.fullPipelineLog(p.Pipeline)
 	stages := make([]exec.Stage, 0, len(p.Pipeline))
 	for i, step := range p.Pipeline {
 		if len(step.Argv) == 0 {
@@ -292,9 +278,8 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
-			input := joinForLog(path, argv)
-			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.user)
-			return nil, deny("pipeline stage not allowed: " + input)
+			s.log.Denied(pipelineLog, s.user)
+			return nil, deny("pipeline stage not allowed: " + util.JoinForLog(path, argv))
 		}
 
 		requested := step.As
@@ -303,9 +288,8 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 		}
 		user := resolveUser(requested, rule.As, s.user)
 		if user == "" {
-			input := joinForLog(path, argv)
-			s.log.Denied(s.fullPipelineLog(p.Pipeline), s.user)
-			return nil, deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayUser(requested, s.user)))
+			s.log.Denied(pipelineLog, s.user)
+			return nil, deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", util.JoinForLog(path, argv), displayUser(requested, s.user)))
 		}
 
 		// For elevation in a pipeline, rewrite the stage to invoke
@@ -313,7 +297,7 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 		// re-validates from disk against the same rule's `as:` list.
 		if user != s.user {
 			if !s.cfg.Sudo {
-				s.log.Denied(s.fullPipelineLog(p.Pipeline), s.user)
+				s.log.Denied(pipelineLog, s.user)
 				return nil, deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)")
 			}
 			path, argv = s.buildElevatedArgv(user, path, argv)
@@ -323,7 +307,6 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 		if i == 0 && p.Stdin != "" {
 			stageStdin = strings.NewReader(p.Stdin)
 		}
-
 		stages = append(stages, exec.Stage{
 			Path:  path,
 			Argv:  argv,
@@ -331,8 +314,7 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 			Stdin: stageStdin,
 		})
 	}
-
-	s.log.Allowed(s.fullPipelineLog(p.Pipeline), s.user)
+	s.log.Allowed(pipelineLog, s.user)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
@@ -374,7 +356,7 @@ func (s *Server) fullPipelineLog(stages []runStep) string {
 			path = st.Argv[0]
 			rest = st.Argv[1:]
 		}
-		parts[i] = joinForLog(path, rest)
+		parts[i] = util.JoinForLog(path, rest)
 	}
 	return strings.Join(parts, " | ")
 }

@@ -111,7 +111,6 @@ func decodeRunResult(t *testing.T, m map[string]any) runResult {
 func TestServer_Hello(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
-		Name:         "ntfy-prod-1",
 		Instructions: "You are on the ntfy prod box.",
 		Commands:     []config.CommandRule{testRule("/bin/echo")},
 	}
@@ -130,8 +129,8 @@ func TestServer_Hello(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected result, got: %v", resps[0])
 	}
-	if result["name"] != cfg.Name {
-		t.Errorf("name = %v, want %q", result["name"], cfg.Name)
+	if _, present := result["name"]; present {
+		t.Errorf("hello result should not include a name field, got: %v", result)
 	}
 	if _, present := result["version"]; present {
 		t.Errorf("hello result should not include a version field, got: %v", result)
@@ -158,18 +157,6 @@ func TestServer_Hello_OmitsEmptyInstructions(t *testing.T) {
 	out, _ := testServer(t, in)
 	if strings.Contains(out.String(), `"instructions"`) {
 		t.Errorf("instructions field should be omitted when empty, got: %s", out.String())
-	}
-}
-
-func TestServer_Hello_DefaultName(t *testing.T) {
-	t.Parallel()
-	// Empty cfg.Name should fall back to "rrsh".
-	in := `{"jsonrpc":"2.0","id":1,"method":"hello"}` + "\n"
-	out, _ := testServer(t, in)
-	resps := decodeResponses(t, out.String())
-	result := resps[0]["result"].(map[string]any)
-	if result["name"] != "rrsh" {
-		t.Errorf("name = %v, want %q", result["name"], "rrsh")
 	}
 }
 
@@ -461,38 +448,6 @@ func TestServer_Run_Stdin(t *testing.T) {
 	rr := decodeRunResult(t, resps[0])
 	if rr.Stdout != "piped in" {
 		t.Errorf("stdout = %q, want %q", rr.Stdout, "piped in")
-	}
-}
-
-// TestJoinForLog_EscapesControlChars covers fix #2 - newlines, CRs and
-// NUL bytes in argv elements must not be passed verbatim into syslog,
-// or an authenticated caller could forge fake log records that look
-// like legitimate ALLOWED/DENIED entries.
-func TestJoinForLog_EscapesControlChars(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		path string
-		argv []string
-		want string
-	}{
-		{"newline", "/bin/echo", []string{"a\nALLOWED: root cmd=/bin/sh"}, "/bin/echo a\\nALLOWED: root cmd=/bin/sh"},
-		{"cr", "/bin/echo", []string{"a\rb"}, "/bin/echo a\\rb"},
-		{"nul", "/bin/echo", []string{"a\x00b"}, "/bin/echo a\\0b"},
-		{"clean", "/bin/echo", []string{"hello", "world"}, "/bin/echo hello world"},
-		{"path with newline", "/bin/x\n", nil, "/bin/x\\n"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := joinForLog(tc.path, tc.argv)
-			if got != tc.want {
-				t.Errorf("joinForLog = %q, want %q", got, tc.want)
-			}
-			if strings.ContainsAny(got, "\n\r\x00") {
-				t.Errorf("result still contains raw control bytes: %q", got)
-			}
-		})
 	}
 }
 

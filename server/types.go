@@ -39,7 +39,6 @@ type rpcError struct {
 // carries host-specific guidance the AI reads on first contact;
 // Commands is the full allowlist (one round-trip self-description).
 type helloResult struct {
-	Name         string          `json:"name"`
 	Instructions string          `json:"instructions,omitempty"`
 	Commands     []*commandEntry `json:"commands"`
 }

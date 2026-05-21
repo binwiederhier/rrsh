@@ -75,7 +75,7 @@ func printShellHelp(w io.Writer) {
 	fmt.Fprintf(w, `rrsh: a JSON-RPC server for server diagnostics, not an interactive shell.
 
 Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Two methods:
-  hello  - name, host-specific instructions, and the full allowlist
+  hello  - host-specific instructions and the full allowlist
   run    - execute one allowlisted command, or a pipeline of stages
 
 Every response is wrapped in {"jsonrpc":"2.0","id":<your-id>, ...}. Errors
@@ -90,7 +90,7 @@ and truncated. Always send a unique numeric "id" so you can correlate.
 
   echo '{"jsonrpc":"2.0","id":1,"method":"hello"}' | ssh -T %[1]s
 
-   The result has {name, instructions, commands}. Read
+   The result has {instructions, commands}. Read
    "instructions" - it's host-specific guidance. Each entry in
    "commands" has a regex list: command[0] matches argv[0] (the path),
    command[i] matches argv[i]. len(argv) must equal len(command).

@@ -38,23 +38,6 @@ func errResponse(id json.RawMessage, code int, msg string) *response {
 	}
 }
 
-// logEscaper neutralizes record-terminator chars in argv so an attacker
-// can't forge fake ALLOWED/DENIED lines in syslog.
-var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
-
-// joinForLog formats (path, argv) as a single space-joined string with
-// log-injection chars in any element neutralized.
-func joinForLog(path string, argv []string) string {
-	if len(argv) == 0 {
-		return logEscaper.Replace(path)
-	}
-	escaped := make([]string, len(argv))
-	for i, a := range argv {
-		escaped[i] = logEscaper.Replace(a)
-	}
-	return logEscaper.Replace(path) + " " + strings.Join(escaped, " ")
-}
-
 // sanitizeDescription strips C0 controls + DEL from operator-authored
 // descriptions before hello.commands returns them - keeps stray ESC or
 // BEL from becoming terminal-injection in the AI client's UI. Tab and
@@ -63,8 +46,7 @@ func sanitizeDescription(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
 			return r
-		}
-		if r < 0x20 || r == 0x7F {
+		} else if r < 0x20 || r == 0x7F {
 			return -1 // drop
 		}
 		return r

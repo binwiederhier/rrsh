@@ -10,7 +10,7 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 
 - Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
-- Two methods are exposed: `hello` (host name, instructions, and the full allowlist) and `run` (executes one command or a pipeline of them).
+- Two methods are exposed: `hello` (host-specific instructions and the full allowlist) and `run` (executes one command or a pipeline of them).
 - Arguments are passed as a real `argv` array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
 - Commands are matched against `/etc/rrsh/rrsh.json` rules (override with `--config=` or `$RRSH_CONFIG`). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
@@ -25,21 +25,31 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
    sudo rpm -i rrsh-*.rpm
    ```
 
-2. **Write the config** at `/etc/rrsh/rrsh.json`. Without one, rrsh refuses to start. See [Configuration](#configuration) below for the schema, or copy and edit the shipped example:
+2. **Write the config** at `/etc/rrsh/rrsh.json`. Without one, rrsh refuses to start. See [Configuration](#configuration) below for the schema, or copy and edit the shipped example - more worked examples live in [examples/](examples/) (e.g. [`examples/rrsh.ntfy.json`](examples/rrsh.ntfy.json) for an ntfy diagnostic host, [`examples/rrsh.ntfy-stats.json`](examples/rrsh.ntfy-stats.json) for a Prometheus stats host):
 
    ```bash
    sudo cp /etc/rrsh/rrsh.json.example /etc/rrsh/rrsh.json
    sudo $EDITOR /etc/rrsh/rrsh.json
    ```
 
-3. **Install the authorized key.** The `rrsh` user's home (`/var/lib/rrsh`) is root-owned (so the `rrsh` user can't edit its own `authorized_keys`); add the AI agent's public key from the operator side:
+3. **Install the authorized key.** The `rrsh` user's home (`/var/lib/rrsh`) is root-owned (so the `rrsh` user can't edit its own `authorized_keys`); the postinst creates `/var/lib/rrsh/.ssh/` for you. Add the AI agent's public key from the operator side:
 
    ```bash
-   sudo install -d -m 755 /var/lib/rrsh/.ssh
    echo 'ssh-ed25519 AAAA... ai-agent-key' | sudo tee -a /var/lib/rrsh/.ssh/authorized_keys
    ```
 
 That's the entire setup - the `rrsh` user can now log in via SSH and reach the JSON-RPC server.
+
+### Optional: Run commands as root
+
+If any of your rules use `"as": ["root", ...]`, you also need to uncomment the grant line in `/etc/sudoers.d/rrsh` (shipped commented-out so installing the package opens no elevation path by default):
+
+```bash
+sudo sed -i 's/^#rrsh /rrsh /' /etc/sudoers.d/rrsh
+sudo visudo -cf /etc/sudoers.d/rrsh   # sanity check
+```
+
+Both knobs must be on for elevation to work: `"sudo": true` in `rrsh.json` AND the uncommented sudoers grant. See [Elevation](#elevation) for the full picture.
 
 ## Configuration
 
@@ -47,7 +57,6 @@ That's the entire setup - the `rrsh` user can now log in via SSH and reach the J
 
 ```json
 {
-  "name": "ntfy-prod-1",
   "instructions": "You are on the ntfy production server. The `hello.commands` array above lists what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
   "sudo": true,
   "commands": [
@@ -73,7 +82,6 @@ Top-level fields:
 
 | Field          | Default     | Meaning                                                                                                       |
 | -------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `name`         | `"rrsh"`    | Reported in `hello.name`. Useful for identifying which host Claude is connected to.                           |
 | `instructions` | empty       | Returned in `hello.instructions` - the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
 | `sudo`         | `false`     | Master switch for elevation. When `false`, every `run` whose effective user differs from the SSH user is denied, and the privileged `rrsh sudo` subcommand refuses to run - even if `/etc/sudoers.d/rrsh` is in place. Must be `true` to use any rule whose `as:` list includes a non-self user. |
 | `commands`     | required    | Array of allowlist rules.                                                                                     |
@@ -91,23 +99,12 @@ Fields on each command entry:
 
 Rules:
 
-- The matcher requires `command[0]` to match the AI-supplied path (a regex, but most operators write a literal like `"/usr/bin/whoami"`). An additional defense-in-depth check requires the AI's path to start with `/`, so accidentally-permissive regexes can't enable PATH-resolution of relative names.
+- The matcher requires `command[0]` to match the caller-supplied path - the string the AI sent as `argv[0]` in the `run` call (a regex, but most operators write a literal like `"/usr/bin/whoami"`). An additional defense-in-depth check requires that path to start with `/`, so accidentally-permissive regexes can't enable PATH-resolution of relative names.
 - `command[0]` can legitimately be a regex when you want one rule to cover related binaries - e.g. `"/usr/bin/(cat|head)"`.
 - Argv matching is element-for-element. `["foo", "bar"]` (two argv elements) is structurally distinct from `["foo bar"]` (one element with a space) - the matcher counts elements separately, so an operator's regex written for two args can't be silently fooled by a single joined element. This is the structural guarantee that makes regex-on-argv safe against shell-injection-style attacks.
 - Each entry of `command` is wrapped in `^(?:…)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
 - **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected - typos in the config fail fast rather than silently weakening the policy.
-
-### Optional: enable elevation
-
-If any of your rules use `"as": ["root", ...]`, you also need to uncomment the grant line in `/etc/sudoers.d/rrsh` (shipped commented-out so installing the package opens no elevation path by default):
-
-```bash
-sudo sed -i 's/^#rrsh /rrsh /' /etc/sudoers.d/rrsh
-sudo visudo -cf /etc/sudoers.d/rrsh   # sanity check
-```
-
-Both knobs must be on for elevation to work: `"sudo": true` in `rrsh.json` AND the uncommented sudoers grant. See [Elevation](#elevation) for the full picture.
 
 ## Wire format
 
@@ -122,7 +119,7 @@ Server-side refusals (matcher denial, elevation disabled, oversize pipeline) com
 
 ### `hello`
 
-No params. Returns `{name, instructions, commands}`. `instructions` is the host-specific guidance an operator put in the config - Claude should read it first. `commands` is the full allowlist: each entry is `{command, as, description?, timeout_seconds?}` where `command` is the operator-authored regex list (element 0 = path regex, elements 1..N-1 = argv regexes). One round-trip is enough to discover everything.
+No params. Returns `{instructions, commands}`. `instructions` is the host-specific guidance an operator put in the config - Claude should read it first. `commands` is the full allowlist: each entry is `{command, as, description?, timeout_seconds?}` where `command` is the operator-authored regex list (element 0 = path regex, elements 1..N-1 = argv regexes). One round-trip is enough to discover everything.
 
 ### `run`
 
@@ -220,7 +217,7 @@ The `as=` field is present only when the executing user differs from the SSH use
 go build -o rrsh .
 ```
 
-Requires Go 1.25+. No CGO, no external dependencies - `go.mod` lists only the module itself.
+Requires Go 1.25+. No external dependencies - `go.mod` lists only the module itself.
 
 ## License
 

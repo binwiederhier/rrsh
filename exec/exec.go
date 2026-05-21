@@ -32,11 +32,17 @@ func Execute(path string, argv []string, rule *config.CommandRule, stdin io.Read
 	}
 
 	err := c.Run()
-	res := &Result{
+	return finalize(&Result{
 		Stdout:    stdout.Bytes(),
 		Stderr:    stderr.Bytes(),
 		Truncated: stdout.Truncated() || stderr.Truncated(),
-	}
+	}, ctx, err)
+}
+
+// finalize fills in ExitCode/TimedOut on a Result based on the context
+// state and the run error from os/exec. Shared by Execute and
+// ExecutePipeline so the timeout/exit-code mapping stays in one place.
+func finalize(res *Result, ctx context.Context, err error) *Result {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.ExitCode = timeoutExitCode
 		res.TimedOut = true
@@ -122,23 +128,9 @@ func ExecutePipeline(stages []Stage) *Result {
 			truncated = true
 		}
 	}
-	res := &Result{
+	return finalize(&Result{
 		Stdout:    finalOut.Bytes(),
 		Stderr:    mergedErr.Bytes(),
 		Truncated: truncated,
-	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		res.ExitCode = timeoutExitCode
-		res.TimedOut = true
-		return res
-	}
-	var exitErr *osexec.ExitError
-	if errors.As(lastErr, &exitErr) {
-		res.ExitCode = exitErr.ExitCode()
-		return res
-	}
-	if lastErr != nil {
-		res.ExitCode = 1
-	}
-	return res
+	}, ctx, lastErr)
 }
