@@ -63,7 +63,7 @@ func finalize(res *Result, ctx context.Context, err error) *Result {
 // i+1's stdin. All stages share one deadline (max of defaultTimeout and
 // any per-rule timeout). Only the last stage's stdout is returned; stderr
 // from every stage is merged. Exit code is the last stage's exit.
-func ExecutePipeline(stages []Stage) *Result {
+func ExecutePipeline(stages []*Stage) *Result {
 	if len(stages) == 0 {
 		return &Result{ExitCode: 1, Stderr: []byte("rrsh: empty pipeline\n")}
 	}

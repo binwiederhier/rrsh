@@ -52,7 +52,8 @@ Usage:
 
 AI integration:
   Mention "ssh -T <user>@<host>" in CLAUDE.md/AGENTS.md so the AI calls hello
-  (returns the full allowlist) and run directly over SSH stdin.
+  (returns the full allowlist) and then run_command or run_pipeline
+  directly over SSH stdin.
 
 Options:
   --config <file>   config file (default: `+defaultConfigPath+`,

@@ -139,8 +139,8 @@ func (s *Server) discardToNewline() error {
 // handle parses one request and returns a response (or nil for
 // notifications). All parse-time errors get reported as JSON-RPC error
 // responses with a null ID.
-func (s *Server) handle(data []byte) *response {
-	var req request
+func (s *Server) handle(data []byte) *jsonrpcResponse {
+	var req jsonrpcRequest
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
@@ -156,24 +156,26 @@ func (s *Server) handle(data []byte) *response {
 	if isNotification {
 		return nil
 	} else if rpcErr != nil {
-		return &response{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
+		return &jsonrpcResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
 	}
-	return &response{JSONRPC: "2.0", ID: req.ID, Result: result}
+	return &jsonrpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result}
 }
 
 // dispatch routes a parsed request to its handler.
-func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError) {
+func (s *Server) dispatch(method string, params json.RawMessage) (any, *jsonrpcError) {
 	switch method {
 	case "hello":
 		return s.handleHello()
-	case "run":
-		return s.handleRun(params)
+	case "run_command":
+		return s.handleRunCommand(params)
+	case "run_pipeline":
+		return s.handleRunPipeline(params)
 	default:
-		return nil, &rpcError{Code: errMethodNotFound, Message: "method not found: " + method}
+		return nil, &jsonrpcError{Code: errMethodNotFound, Message: "method not found: " + method}
 	}
 }
 
-func (s *Server) handleHello() (any, *rpcError) {
+func (s *Server) handleHello() (any, *jsonrpcError) {
 	out := make([]*commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
 		entry := &commandEntry{
@@ -192,122 +194,100 @@ func (s *Server) handleHello() (any, *rpcError) {
 	}, nil
 }
 
-// handleRun requires exactly one of `argv` or `pipeline`. Matcher
-// denials surface as JSON-RPC errors (code errDenied) so the AI client
-// gets a clean signal - the child's own non-zero exit lives in
-// result.exit, not in the RPC error envelope.
-func (s *Server) handleRun(params json.RawMessage) (any, *rpcError) {
+// handleRunCommand wraps a single argv into a one-stage pipeline and
+// delegates to runPipeline. Top-level `as` and `stdin` map to the
+// stage's `as` and the pipeline's `stdin`.
+func (s *Server) handleRunCommand(params json.RawMessage) (any, *jsonrpcError) {
 	if len(params) == 0 {
-		return nil, &rpcError{Code: errInvalidParams, Message: "run requires params"}
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires params"}
 	}
-	var p runParams
+	var p runCommandParams
 	dec := json.NewDecoder(bytes.NewReader(params))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
-		return nil, &rpcError{Code: errInvalidParams, Message: "invalid run params: " + err.Error()}
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "invalid run_command params: " + err.Error()}
+	} else if len(p.Argv) == 0 {
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires non-empty argv"}
 	}
-	hasArgv := len(p.Argv) > 0
-	hasPipeline := len(p.Pipeline) > 0
-	if hasArgv == hasPipeline {
-		return nil, &rpcError{Code: errInvalidParams, Message: "run requires exactly one of argv or pipeline"}
-	} else if hasArgv {
-		return s.runCommand(p)
-	}
-	return s.runPipeline(p)
+	return s.runPipeline([]*runStep{{Argv: p.Argv, As: p.As}}, p.Stdin)
 }
 
-// runCommand executes a single-argv run call.
-func (s *Server) runCommand(p runParams) (any, *rpcError) {
-	path := p.Argv[0]
-	argv := p.Argv[1:]
-
-	rule, ok := s.matcher.Match(path, argv)
-	if !ok {
-		input := util.JoinForLog(path, argv)
-		s.log.Denied(input, s.user)
-		return nil, deny("command not allowed: " + input)
+// handleRunPipeline executes a multi-stage pipeline. `stdin` (if set)
+// feeds stage 0; each stage's `as` is independent.
+func (s *Server) handleRunPipeline(params json.RawMessage) (any, *jsonrpcError) {
+	if len(params) == 0 {
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_pipeline requires params"}
 	}
-
-	requested := p.As
-	if requested == "" {
-		requested = config.SelfUser
+	var p runPipelineParams
+	dec := json.NewDecoder(bytes.NewReader(params))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "invalid run_pipeline params: " + err.Error()}
 	}
-	user := resolveUser(requested, rule.As, s.user)
-	if user == "" {
-		input := util.JoinForLog(path, argv)
-		s.log.Denied(input, s.user)
-		return nil, deny(fmt.Sprintf("%s not permitted to run as %s", input, displayUser(requested, s.user)))
+	if len(p.Pipeline) == 0 {
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_pipeline requires non-empty pipeline"}
 	}
-
-	var stdin io.Reader
-	if p.Stdin != "" {
-		stdin = strings.NewReader(p.Stdin)
-	}
-
-	input := util.JoinForLog(path, argv)
-	if user == s.user {
-		s.log.Allowed(input, s.user)
-		return toRunResult(exec.Execute(path, argv, rule, stdin)), nil
-	}
-
-	if !s.cfg.Sudo {
-		s.log.Denied(input, s.user)
-		return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
-	}
-
-	s.log.Allowed(input, user)
-	return toRunResult(s.elevateAndExecute(user, path, argv, rule, stdin)), nil
+	return s.runPipeline(p.Pipeline, p.Stdin)
 }
 
-// runPipeline executes a multi-stage pipeline.
-func (s *Server) runPipeline(p runParams) (any, *rpcError) {
-	if p.As != "" {
-		return nil, &rpcError{Code: errInvalidParams, Message: "top-level `as` is not valid with pipeline - set `as` per stage"}
-	}
-	if len(p.Pipeline) > maxPipelineStages {
+// runPipeline is the single execution path for both run_command (which
+// arrives as a one-stage pipeline) and run_pipeline. A one-stage call
+// logs and behaves identically to a direct argv call - the syslog
+// entry has no " | " separator because there is only one stage. Matcher
+// denials surface as JSON-RPC errors (code errDenied) so the AI client
+// gets a clean signal - the child's own non-zero exit lives in
+// result.exit, not in the RPC error envelope.
+func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcError) {
+	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
-	pipelineLog := s.fullPipelineLog(p.Pipeline)
-	stages := make([]exec.Stage, 0, len(p.Pipeline))
-	for i, step := range p.Pipeline {
+	pipelineLog := formatPipelineLog(steps)
+	stages := make([]*exec.Stage, 0, len(steps))
+	for i, step := range steps {
 		if len(step.Argv) == 0 {
-			return nil, &rpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty argv", i)}
+			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty argv", i)}
 		}
 		path := step.Argv[0]
 		argv := step.Argv[1:]
 
+		requestedUser := step.As
+		if requestedUser == "" {
+			requestedUser = config.SelfUser
+		}
+		// loggedUser is what goes into the `as=` field of syslog audit
+		// records, normalized so "self" renders as the SSH user (and is
+		// then omitted by the logger when it equals the SSH user).
+		loggedUser := displayUser(requestedUser, s.user)
+
+		// Ensure that each step is allowed before running it
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
-			s.log.Denied(pipelineLog, s.user)
-			return nil, deny("pipeline stage not allowed: " + util.JoinForLog(path, argv))
+			s.log.Denied(pipelineLog, loggedUser)
+			return nil, deny("command not allowed: " + util.JoinForLog(path, argv))
 		}
 
-		requested := step.As
-		if requested == "" {
-			requested = config.SelfUser
-		}
-		user := resolveUser(requested, rule.As, s.user)
-		if user == "" {
-			s.log.Denied(pipelineLog, s.user)
-			return nil, deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", util.JoinForLog(path, argv), displayUser(requested, s.user)))
+		runAs, err := resolveUser(s.user, requestedUser, rule.As)
+		if err != nil {
+			s.log.Denied(pipelineLog, loggedUser)
+			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), loggedUser))
 		}
 
-		// For elevation in a pipeline, rewrite the stage to invoke
+		// For elevation, rewrite the stage to invoke
 		// /usr/bin/sudo … rrsh sudo <path> <argv>. The privileged half
 		// re-validates from disk against the same rule's `as:` list.
-		if user != s.user {
+		if runAs != s.user {
 			if !s.cfg.Sudo {
-				s.log.Denied(pipelineLog, s.user)
-				return nil, deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)")
+				s.log.Denied(pipelineLog, runAs)
+				return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
 			}
-			path, argv = s.buildElevatedArgv(user, path, argv)
+			path, argv = s.buildSudoCommand(runAs, path, argv)
 		}
 
 		var stageStdin io.Reader
-		if i == 0 && p.Stdin != "" {
-			stageStdin = strings.NewReader(p.Stdin)
+		if i == 0 && stdinStr != "" {
+			stageStdin = strings.NewReader(stdinStr)
 		}
-		stages = append(stages, exec.Stage{
+		stages = append(stages, &exec.Stage{
 			Path:  path,
 			Argv:  argv,
 			Rule:  rule,
@@ -318,45 +298,18 @@ func (s *Server) runPipeline(p runParams) (any, *rpcError) {
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
-// elevateAndExecute re-execs the rrsh binary via /usr/bin/sudo to run the
-// command as `user`. The privileged half (cmd/sudo.go) reads its argv
-// directly from os.Args, re-loads config from disk, and re-validates the
-// rule's `as:` list before executing.
-func (s *Server) elevateAndExecute(user, path string, argv []string, rule *config.CommandRule, stdin io.Reader) *exec.Result {
-	sudoPath, sudoArgv := s.buildElevatedArgv(user, path, argv)
-	// Pretend the elevation is just another command - same executor
-	// semantics, same timeout.
-	return exec.Execute(sudoPath, sudoArgv, rule, stdin)
-}
-
-// buildElevatedArgv produces (path, argv) suitable for exec.Execute to
+// buildSudoCommand produces (path, argv) suitable for exec.Execute to
 // spawn /usr/bin/sudo and re-enter rrsh's privileged half.
 //
-//	sudo -n [-u USER] /usr/bin/rrsh sudo <path> <argv...>
+//	/usr/bin/sudo --non-interactive [--user=USER] /usr/bin/rrsh sudo <path> <argv...>
 //
 // -u is omitted when user == "root" (sudo defaults to root).
-func (s *Server) buildElevatedArgv(user, path string, argv []string) (string, []string) {
-	out := []string{"-n"}
+func (s *Server) buildSudoCommand(user, path string, argv []string) (string, []string) {
+	args := []string{"--non-interactive"}
 	if user != "root" {
-		out = append(out, "-u", user)
+		args = append(args, "--user="+user)
 	}
-	out = append(out, s.rrsh, "sudo", path)
-	out = append(out, argv...)
-	return "/usr/bin/sudo", out
-}
-
-// fullPipelineLog formats a pipeline as a single space-joined string for
-// syslog. Stages are joined with " | " for readability.
-func (s *Server) fullPipelineLog(stages []runStep) string {
-	parts := make([]string, len(stages))
-	for i, st := range stages {
-		path := ""
-		var rest []string
-		if len(st.Argv) > 0 {
-			path = st.Argv[0]
-			rest = st.Argv[1:]
-		}
-		parts[i] = util.JoinForLog(path, rest)
-	}
-	return strings.Join(parts, " | ")
+	args = append(args, s.rrsh, "sudo", path)
+	args = append(args, argv...)
+	return "/usr/bin/sudo", args
 }

@@ -100,9 +100,9 @@ func TestExecutePipeline_Success(t *testing.T) {
 	t.Parallel()
 	echoRule := &config.CommandRule{}
 	catRule := &config.CommandRule{}
-	res := ExecutePipeline([]Stage{
-		{Path: "/bin/echo", Argv: []string{"hello pipeline"}, Rule: echoRule},
-		{Path: "/bin/cat", Rule: catRule},
+	res := ExecutePipeline([]*Stage{
+		&Stage{Path: "/bin/echo", Argv: []string{"hello pipeline"}, Rule: echoRule},
+		&Stage{Path: "/bin/cat", Rule: catRule},
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
@@ -117,9 +117,9 @@ func TestExecutePipeline_LastStageExitWins(t *testing.T) {
 	// Even though the first stage succeeds, the last stage exits non-zero.
 	echoRule := &config.CommandRule{}
 	falseRule := &config.CommandRule{}
-	res := ExecutePipeline([]Stage{
-		{Path: "/bin/echo", Argv: []string{"x"}, Rule: echoRule},
-		{Path: "/bin/false", Rule: falseRule},
+	res := ExecutePipeline([]*Stage{
+		&Stage{Path: "/bin/echo", Argv: []string{"x"}, Rule: echoRule},
+		&Stage{Path: "/bin/false", Rule: falseRule},
 	})
 	if res.ExitCode == 0 {
 		t.Errorf("expected non-zero exit, got %d", res.ExitCode)
@@ -129,9 +129,9 @@ func TestExecutePipeline_LastStageExitWins(t *testing.T) {
 func TestExecutePipeline_Stdin(t *testing.T) {
 	t.Parallel()
 	catRule := &config.CommandRule{}
-	res := ExecutePipeline([]Stage{
-		{Path: "/bin/cat", Rule: catRule, Stdin: strings.NewReader("piped in\n")},
-		{Path: "/bin/cat", Rule: catRule},
+	res := ExecutePipeline([]*Stage{
+		&Stage{Path: "/bin/cat", Rule: catRule, Stdin: strings.NewReader("piped in\n")},
+		&Stage{Path: "/bin/cat", Rule: catRule},
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
@@ -144,8 +144,8 @@ func TestExecutePipeline_Stdin(t *testing.T) {
 func TestExecutePipeline_SingleStageEquivalentToExecute(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := ExecutePipeline([]Stage{
-		{Path: "/bin/echo", Argv: []string{"solo"}, Rule: rule},
+	res := ExecutePipeline([]*Stage{
+		&Stage{Path: "/bin/echo", Argv: []string{"solo"}, Rule: rule},
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)

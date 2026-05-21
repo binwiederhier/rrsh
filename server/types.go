@@ -14,7 +14,7 @@ const (
 
 // request is one JSON-RPC 2.0 request. ID is RawMessage so we echo it
 // back unchanged (numbers, strings, and null are all valid IDs).
-type request struct {
+type jsonrpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
@@ -23,14 +23,14 @@ type request struct {
 
 // response is one JSON-RPC 2.0 response. Exactly one of Result and
 // Error is set.
-type response struct {
+type jsonrpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Result  any             `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
+	Error   *jsonrpcError       `json:"error,omitempty"`
 }
 
-type rpcError struct {
+type jsonrpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
@@ -53,13 +53,17 @@ type commandEntry struct {
 	TimeoutSecs float64  `json:"timeout_seconds,omitempty"`
 }
 
-// runParams is the request body of the `run` method. Exactly one of
-// Argv and Pipeline must be set.
-type runParams struct {
-	Argv     []string  `json:"argv,omitempty"`
-	Pipeline []runStep `json:"pipeline,omitempty"`
-	As       string    `json:"as,omitempty"`
-	Stdin    string    `json:"stdin,omitempty"`
+// runCommandParams is the request body of the `run_command` method.
+type runCommandParams struct {
+	Argv  []string `json:"argv"`
+	As    string   `json:"as,omitempty"`
+	Stdin string   `json:"stdin,omitempty"`
+}
+
+// runPipelineParams is the request body of the `run_pipeline` method.
+type runPipelineParams struct {
+	Pipeline []*runStep `json:"pipeline"`
+	Stdin    string     `json:"stdin,omitempty"`
 }
 
 // runStep is one stage of a pipeline.
@@ -68,7 +72,7 @@ type runStep struct {
 	As   string   `json:"as,omitempty"`
 }
 
-// runResult is the response body of the `run` method.
+// runResult is the response body of both `run_command` and `run_pipeline`.
 type runResult struct {
 	Stdout    string `json:"stdout"`
 	Stderr    string `json:"stderr"`

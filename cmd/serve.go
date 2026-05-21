@@ -74,9 +74,10 @@ func printShellHelp(w io.Writer) {
 	target := sshTargetHint()
 	fmt.Fprintf(w, `rrsh: a JSON-RPC server for server diagnostics, not an interactive shell.
 
-Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Two methods:
-  hello  - host-specific instructions and the full allowlist
-  run    - execute one allowlisted command, or a pipeline of stages
+Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Three methods:
+  hello          - host-specific instructions and the full allowlist
+  run_command    - execute one allowlisted command
+  run_pipeline   - chain stages with native Go pipes (no shell)
 
 Every response is wrapped in {"jsonrpc":"2.0","id":<your-id>, ...}. Errors
 (allowlist denial, elevation off, oversize input) come back as
@@ -94,12 +95,12 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    "instructions" - it's host-specific guidance. Each entry in
    "commands" has a regex list: command[0] matches argv[0] (the path),
    command[i] matches argv[i]. len(argv) must equal len(command).
-   Once you know what's allowed, jump straight to "run" - no need to
-   resend "hello" for subsequent calls.
+   Once you know what's allowed, jump straight to "run_command" or
+   "run_pipeline" - no need to resend "hello" for subsequent calls.
 
 2) Run one command as the SSH user (default):
 
-  echo '{"jsonrpc":"2.0","id":2,"method":"run",
+  echo '{"jsonrpc":"2.0","id":2,"method":"run_command",
          "params":{"argv":["/usr/bin/whoami"]}}' | ssh -T %[1]s
 
    Result: {"stdout":"...","stderr":"...","exit":0}
@@ -109,24 +110,24 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    exactly one non-self user, you can OMIT "as" and rrsh auto-elevates
    (the common "always root" case):
 
-  echo '{"jsonrpc":"2.0","id":3,"method":"run","params":{
+  echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
          "argv":["/usr/bin/journalctl","-u","ntfy","-n","100"],
          "as":"root"}}' | ssh -T %[1]s
 
 4) Pipe data INTO a command (no shell involved - this is just a string
    handed to the child's stdin):
 
-  echo '{"jsonrpc":"2.0","id":4,"method":"run","params":{
+  echo '{"jsonrpc":"2.0","id":4,"method":"run_command","params":{
          "argv":["/usr/bin/grep","-i","error"],
          "stdin":"foo\nERROR: bar\nbaz\n"}}' | ssh -T %[1]s
 
-5) Pipeline - chain stages with the "pipeline" array. There is NO shell
+5) Pipeline - chain stages with run_pipeline. There is NO shell
    anywhere in rrsh; "|" and ">" inside an argv element are literal
    bytes, not metacharacters. Each stage is independently matched and
    authorized. stdout of stage i feeds stdin of stage i+1. Per-stage
    "as" lets an elevated stage feed an unprivileged filter:
 
-  echo '{"jsonrpc":"2.0","id":5,"method":"run","params":{"pipeline":[
+  echo '{"jsonrpc":"2.0","id":5,"method":"run_pipeline","params":{"pipeline":[
          {"argv":["/usr/bin/journalctl","-u","ntfy","-n","1000"],"as":"root"},
          {"argv":["/usr/bin/grep","-i","error"]}
        ]}}' | ssh -T %[1]s
@@ -135,8 +136,8 @@ and truncated. Always send a unique numeric "id" so you can correlate.
 
   printf '%%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"hello"}' \
-    '{"jsonrpc":"2.0","id":2,"method":"run","params":{"argv":["/usr/bin/whoami"]}}' \
-    '{"jsonrpc":"2.0","id":3,"method":"run","params":{"argv":["/usr/bin/uptime"]}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/whoami"]}}' \
+    '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"argv":["/usr/bin/uptime"]}}' \
     | ssh -T %[1]s
 
 Constraints:

@@ -2,12 +2,18 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
+	"github.com/binwiederhier/rrsh/util"
 )
+
+// errUserNotPermitted is returned by resolveUser when the requested
+// target user is not allowed by the matched rule's `as:` list.
+var errUserNotPermitted = errors.New("requested user not permitted by rule's as: list")
 
 // toRunResult converts the executor's internal Result into the wire shape.
 func toRunResult(res *exec.Result) *runResult {
@@ -21,20 +27,20 @@ func toRunResult(res *exec.Result) *runResult {
 }
 
 // deny builds the application-specific "denied" RPC error.
-func deny(msg string) *rpcError {
-	return &rpcError{Code: errDenied, Message: msg}
+func deny(msg string) *jsonrpcError {
+	return &jsonrpcError{Code: errDenied, Message: msg}
 }
 
 // errResponse wraps a JSON-RPC error into a full response envelope. A
 // nil id is rendered as JSON null per the spec.
-func errResponse(id json.RawMessage, code int, msg string) *response {
+func errResponse(id json.RawMessage, code int, msg string) *jsonrpcResponse {
 	if id == nil {
 		id = json.RawMessage("null")
 	}
-	return &response{
+	return &jsonrpcResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error:   &rpcError{Code: code, Message: msg},
+		Error:   &jsonrpcError{Code: code, Message: msg},
 	}
 }
 
@@ -62,28 +68,29 @@ func safeUTF8(b []byte) string {
 	return strings.ToValidUTF8(string(b), "\uFFFD")
 }
 
-// resolveUser returns the effective user a call should run as, or ""
-// to deny. "self" in requested or in the allowed list resolves to the
-// SSH user. A single-user rule implicitly elevates when the caller
+// resolveUser returns the effective user a call should run as, or
+// errUserNotPermitted if the requested user is not in the rule's
+// allowed list. "self" in requested or in the allowed list resolves to
+// the SSH user. A single-user rule implicitly elevates when the caller
 // didn't ask for a different user (the common "always root" case).
-func resolveUser(requested string, allowed []string, self string) string {
-	if requested == config.SelfUser {
-		requested = self
+func resolveUser(currentUser, requestedUser string, allowed []string) (string, error) {
+	if requestedUser == config.SelfUser {
+		requestedUser = currentUser
 	}
 	var single string
 	for _, u := range allowed {
 		if u == config.SelfUser {
-			u = self
+			u = currentUser
 		}
-		if u == requested {
-			return requested
+		if u == requestedUser {
+			return requestedUser, nil
 		}
 		single = u
 	}
-	if requested == self && len(allowed) == 1 {
-		return single
+	if requestedUser == currentUser && len(allowed) == 1 {
+		return single, nil
 	}
-	return ""
+	return "", errUserNotPermitted
 }
 
 // displayUser returns the user name to put in an error message, with
@@ -93,4 +100,20 @@ func displayUser(requested, self string) string {
 		return self
 	}
 	return requested
+}
+
+// formatPipelineLog formats a pipeline as a single space-joined string for
+// syslog. Stages are joined with " | " for readability.
+func formatPipelineLog(stages []*runStep) string {
+	parts := make([]string, len(stages))
+	for i, st := range stages {
+		path := ""
+		var rest []string
+		if len(st.Argv) > 0 {
+			path = st.Argv[0]
+			rest = st.Argv[1:]
+		}
+		parts[i] = util.JoinForLog(path, rest)
+	}
+	return strings.Join(parts, " | ")
 }
