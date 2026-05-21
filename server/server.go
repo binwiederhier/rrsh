@@ -27,7 +27,7 @@ type Server struct {
 	cfg     *config.Config
 	matcher *matcher.Matcher
 	log     *logger.SyslogLogger
-	user    string // current SSH user
+	user    string // current user
 	rrsh    string // path to this binary for elevation re-exec
 	in      *bufio.Reader
 	out     io.Writer
@@ -241,7 +241,7 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
-	pipelineLog := formatPipelineLog(steps)
+	commandForLog := formatCommandForLog(steps)
 	stages := make([]*exec.Stage, 0, len(steps))
 	for i, step := range steps {
 		if len(step.Argv) == 0 {
@@ -250,37 +250,30 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 		path := step.Argv[0]
 		argv := step.Argv[1:]
 
-		requestedUser := step.As
-		if requestedUser == "" {
-			requestedUser = config.SelfUser
-		}
-		// loggedUser is what goes into the `as=` field of syslog audit
-		// records, normalized so "self" renders as the SSH user (and is
-		// then omitted by the logger when it equals the SSH user).
-		loggedUser := displayUser(requestedUser, s.user)
-
-		// Ensure that each step is allowed before running it
+		// Make sure command is allowed
+		runAsUser := normalizeUser(step.As, s.user)
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
-			s.log.Denied(pipelineLog, loggedUser)
+			s.log.Denied(commandForLog, runAsUser)
 			return nil, deny("command not allowed: " + util.JoinForLog(path, argv))
 		}
 
-		runAs, err := resolveUser(s.user, requestedUser, rule.As)
+		effective, err := authorizeUser(runAsUser, s.user, rule.As)
 		if err != nil {
-			s.log.Denied(pipelineLog, loggedUser)
-			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), loggedUser))
+			s.log.Denied(commandForLog, runAsUser)
+			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), runAsUser))
 		}
+		runAsUser = effective // may flip self → root for implicit-elevation rules
 
 		// For elevation, rewrite the stage to invoke
 		// /usr/bin/sudo … rrsh sudo <path> <argv>. The privileged half
 		// re-validates from disk against the same rule's `as:` list.
-		if runAs != s.user {
+		if runAsUser != s.user {
 			if !s.cfg.Sudo {
-				s.log.Denied(pipelineLog, runAs)
+				s.log.Denied(commandForLog, runAsUser)
 				return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
 			}
-			path, argv = s.buildSudoCommand(runAs, path, argv)
+			path, argv = s.buildSudoCommand(runAsUser, path, argv)
 		}
 
 		var stageStdin io.Reader
@@ -294,7 +287,7 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 			Stdin: stageStdin,
 		})
 	}
-	s.log.Allowed(pipelineLog, s.user)
+	s.log.Allowed(commandForLog, s.user)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 

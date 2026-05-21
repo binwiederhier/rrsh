@@ -11,7 +11,7 @@ import (
 	"github.com/binwiederhier/rrsh/util"
 )
 
-// errUserNotPermitted is returned by resolveUser when the requested
+// errUserNotPermitted is returned by authorizeUser when the requested
 // target user is not allowed by the matched rule's `as:` list.
 var errUserNotPermitted = errors.New("requested user not permitted by rule's as: list")
 
@@ -68,43 +68,40 @@ func safeUTF8(b []byte) string {
 	return strings.ToValidUTF8(string(b), "\uFFFD")
 }
 
-// resolveUser returns the effective user a call should run as, or
-// errUserNotPermitted if the requested user is not in the rule's
-// allowed list. "self" in requested or in the allowed list resolves to
-// the SSH user. A single-user rule implicitly elevates when the caller
-// didn't ask for a different user (the common "always root" case).
-func resolveUser(currentUser, requestedUser string, allowed []string) (string, error) {
-	if requestedUser == config.SelfUser {
-		requestedUser = currentUser
+// normalizeUser resolves "" or "self" to the SSH user
+func normalizeUser(requestedUser, currentUser string) string {
+	if requestedUser == "" || requestedUser == config.SelfUser {
+		return currentUser
 	}
+	return requestedUser
+}
+
+// authorizeUser returns the effective user a call should run as, or
+// errUserNotPermitted if the requested user is not in the rule's
+// allowed list. The returned user can differ from `runAs` for the
+// implicit-elevation case: a rule that allows exactly one non-self
+// user auto-elevates when the caller didn't request a specific user
+// (the common "always root" case). `runAs` must already be normalized.
+func authorizeUser(runAsUser, currentUser string, allowedUsers []string) (string, error) {
 	var single string
-	for _, u := range allowed {
+	for _, u := range allowedUsers {
 		if u == config.SelfUser {
 			u = currentUser
 		}
-		if u == requestedUser {
-			return requestedUser, nil
+		if u == runAsUser {
+			return runAsUser, nil
 		}
 		single = u
 	}
-	if requestedUser == currentUser && len(allowed) == 1 {
+	if runAsUser == currentUser && len(allowedUsers) == 1 {
 		return single, nil
 	}
 	return "", errUserNotPermitted
 }
 
-// displayUser returns the user name to put in an error message, with
-// "self" replaced by the actual SSH user for readability.
-func displayUser(requested, self string) string {
-	if requested == config.SelfUser {
-		return self
-	}
-	return requested
-}
-
-// formatPipelineLog formats a pipeline as a single space-joined string for
+// formatCommandForLog formats a pipeline as a single space-joined string for
 // syslog. Stages are joined with " | " for readability.
-func formatPipelineLog(stages []*runStep) string {
+func formatCommandForLog(stages []*runStep) string {
 	parts := make([]string, len(stages))
 	for i, st := range stages {
 		path := ""
