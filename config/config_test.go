@@ -216,8 +216,8 @@ func TestParse_AsList(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
 		{"command": ["/bin/systemctl", "restart", ".+"], "as": ["root"]},
-		{"command": ["/usr/bin/whoami"],                 "as": ["self", "root"]},
-		{"command": ["/bin/deploy.sh"],                  "as": ["self", "deploy"]}
+		{"command": ["/usr/bin/whoami"], "as": ["self", "root"]},
+		{"command": ["/bin/deploy.sh"], "as": ["self", "deploy"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

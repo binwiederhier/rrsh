@@ -17,53 +17,29 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 
 ## Install
 
-Download a `.deb` or `.rpm` from the releases page, then:
+1. **Install the package.** Download a `.deb` or `.rpm` from the releases page:
 
-```bash
-sudo dpkg -i rrsh_*.deb
-# or
-sudo rpm -i rrsh-*.rpm
-```
+   ```bash
+   sudo dpkg -i rrsh_*.deb
+   # or
+   sudo rpm -i rrsh-*.rpm
+   ```
 
-The package installs:
+2. **Write the config** at `/etc/rrsh/rrsh.json`. Without one, rrsh refuses to start. See [Configuration](#configuration) below for the schema, or copy and edit the shipped example:
 
-| Path | Notes |
-|------|-------|
-| `/usr/bin/rrsh` | the binary |
-| `/etc/rrsh/rrsh.json.example` | reference config - copy to `/etc/rrsh/rrsh.json` to activate |
-| `/etc/sudoers.d/rrsh` | sudoers grant for elevation (conffile, mode `0440`, validated by `visudo` at install) |
-| `/var/lib/rrsh/` | package-owned home dir for the `rrsh` user; ships with `.hushlogin` so sshd doesn't prepend its motd/last-login banner to JSON-RPC output |
+   ```bash
+   sudo cp /etc/rrsh/rrsh.json.example /etc/rrsh/rrsh.json
+   sudo $EDITOR /etc/rrsh/rrsh.json
+   ```
 
-The postinst script also:
+3. **Install the authorized key.** The `rrsh` user's home (`/var/lib/rrsh`) is root-owned (so the `rrsh` user can't edit its own `authorized_keys`); add the AI agent's public key from the operator side:
 
-- Adds `/usr/bin/rrsh` to `/etc/shells`.
-- Creates the `rrsh` system user with `/usr/bin/rrsh` as its login shell and `/var/lib/rrsh` as its home directory. The password is locked - the account is SSH-key-only.
+   ```bash
+   sudo install -d -m 755 /var/lib/rrsh/.ssh
+   echo 'ssh-ed25519 AAAA... ai-agent-key' | sudo tee -a /var/lib/rrsh/.ssh/authorized_keys
+   ```
 
-**Note:** the package does *not* install a default `/etc/rrsh/rrsh.json`. Without one, rrsh refuses to start. Copy the shipped example to activate:
-
-```bash
-sudo cp /etc/rrsh/rrsh.json.example /etc/rrsh/rrsh.json
-sudo $EDITOR /etc/rrsh/rrsh.json
-```
-
-## Set up the SSH key
-
-The `rrsh` user's home (`/var/lib/rrsh`) is owned by root and contains no `authorized_keys` yet. Add Claude's (or another AI agent's) public key:
-
-```bash
-sudo install -d -m 755 /var/lib/rrsh/.ssh
-sudo install -m 644 /path/to/key.pub /var/lib/rrsh/.ssh/authorized_keys
-```
-
-The home dir is intentionally root-owned: the `rrsh` user cannot modify its own `authorized_keys`, only the operator can. That's the entire setup - the `rrsh` user can now log in via SSH and reach the JSON-RPC server.
-
-## Connect from Claude
-
-Just tell Claude how to reach the host. No MCP registration, no client-side config - Claude SSHs ad-hoc using its bash tool. Drop a one-liner into the session or your `CLAUDE.md`:
-
-> You can diagnose this host via `ssh -T rrsh@prod.example.com`. It speaks newline-delimited JSON-RPC 2.0 over stdin: call `hello` first to read host-specific instructions and the allowlist, then `run` with a JSON `{argv: […]}` or `{pipeline: [{argv: […]}, …]}`.
-
-The first time Claude tries something shell-shaped like `ssh rrsh@prod.example.com whoami`, rrsh refuses with an instructive message that shows the right shape. From there Claude calls `hello`, reads the `instructions` field for host context, and proceeds. This scales to N hosts without N client-side entries - the discoverability is in the protocol, not in your config.
+That's the entire setup - the `rrsh` user can now log in via SSH and reach the JSON-RPC server.
 
 ## Configuration
 
@@ -84,10 +60,10 @@ The first time Claude tries something shell-shaped like `ssh rrsh@prod.example.c
     { "command": ["/usr/bin/ping", "-c", "\\d+", ".+"], "timeout": "60s",
       "description": "Ping a host a fixed number of times. Allowed up to 60s." },
 
-    { "command": ["/bin/systemctl", "restart", "ntfy"],  "as": ["root"],
+    { "command": ["/bin/systemctl", "restart", "ntfy"], "as": ["root"],
       "description": "Restart the ntfy systemd unit." },
 
-    { "command": ["/bin/journalctl", "-fu", "ntfy"],     "as": ["self", "root"],
+    { "command": ["/bin/journalctl", "-fu", "ntfy"], "as": ["self", "root"],
       "description": "Follow the ntfy unit log." }
   ]
 }
@@ -121,6 +97,17 @@ Rules:
 - Each entry of `command` is wrapped in `^(?:…)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
 - **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected - typos in the config fail fast rather than silently weakening the policy.
+
+### Optional: enable elevation
+
+If any of your rules use `"as": ["root", ...]`, you also need to uncomment the grant line in `/etc/sudoers.d/rrsh` (shipped commented-out so installing the package opens no elevation path by default):
+
+```bash
+sudo sed -i 's/^#rrsh /rrsh /' /etc/sudoers.d/rrsh
+sudo visudo -cf /etc/sudoers.d/rrsh   # sanity check
+```
+
+Both knobs must be on for elevation to work: `"sudo": true` in `rrsh.json` AND the uncommented sudoers grant. See [Elevation](#elevation) for the full picture.
 
 ## Wire format
 
@@ -226,14 +213,6 @@ Mar  5 21:22:55 host rrsh[12349]: ALLOWED: user=rrsh cmd=/usr/bin/journalctl -u 
 ```
 
 The `as=` field is present only when the executing user differs from the SSH user. Pipelines are logged as the space-joined stages separated by ` | `. On Debian/Ubuntu these typically end up in `/var/log/auth.log`; on RHEL-likes in `/var/log/secure`.
-
-## Why JSON-RPC, not shell-string parsing
-
-SSH joins the client's arguments into a single string before sshd ever sees them, so a restricted shell that reads `-c "..."` is fundamentally a string parser. Quoting, embedded spaces, and metacharacters become parser concerns - and any parser bug is on the privileged trust boundary.
-
-rrsh used to be a string parser. It isn't any more. With JSON-RPC, every argument arrives in its own array slot, so input like `grep " | > /dev/null"` is unambiguous: the literal pipe-and-redirect string is one element in `argv`, not a shell metacharacter. The matcher is a per-element regex list; the executor invokes the binary with the original slice. No tokenization layer to write or audit.
-
-If you need a human-friendly CLI on top of this, write one in your client (it can call `run` directly). rrsh's job is to be a safe, structured endpoint.
 
 ## Build from source
 
