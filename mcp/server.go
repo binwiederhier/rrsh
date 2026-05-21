@@ -265,12 +265,12 @@ func (s *Server) handleToolsList() (any, *rpcError) {
 		Tools: []toolDef{
 			{
 				Name:        "list_commands",
-				Description: "List every command rule this rrsh instance will allow. Returns a JSON array of {path, args_patterns, as, description, timeout_seconds}. `args_patterns` is a list of regexes, one per argv element — your argv must have the same length AND each element must match the corresponding pattern. Multiple rules with the same path describe alternative argv shapes; the first matching rule wins. Call this first to discover what run_command can execute.",
+				Description: "List every command rule this rrsh instance will allow. Returns a JSON array of {command, as, description, timeout_seconds}. `command` is a list of regexes: element 0 matches the binary path, elements 1..N-1 match argv elements. Your argv length must equal len(command)-1 AND each element must match its corresponding pattern. Multiple rules can share a command[0] regex to describe alternative argv shapes; the first matching rule wins. Call this first to discover what run_command can execute.",
 				InputSchema: listCommandsSchema,
 			},
 			{
 				Name:        "run_command",
-				Description: "Execute one allowlisted command, or chain several with a native pipeline (no shell involved). Pass `argv` as a string array (first element = absolute path), or pass `pipeline` as an array of {argv, as?} stages — stdout of stage N feeds stdin of stage N+1. Example pipeline: `[{\"argv\":[\"/usr/bin/cat\",\"/var/log/syslog\"]},{\"argv\":[\"/usr/bin/grep\",\"-i\",\"error\",\"/dev/stdin\"]}]`. Each rule's args_patterns list decides whether the arguments are accepted (argv length must match the list length, and each element must match its corresponding regex). Returns structured {stdout, stderr, exit, timed_out, truncated}.",
+				Description: "Execute one allowlisted command, or chain several with a native pipeline (no shell involved). Pass `argv` as a string array (first element = absolute path), or pass `pipeline` as an array of {argv, as?} stages — stdout of stage N feeds stdin of stage N+1. Example pipeline: `[{\"argv\":[\"/usr/bin/cat\",\"/var/log/syslog\"]},{\"argv\":[\"/usr/bin/grep\",\"-i\",\"error\",\"/dev/stdin\"]}]`. Each rule's `command` list decides whether the call is accepted: element 0 must match the path, and remaining elements must match argv 1-for-1. Returns structured {stdout, stderr, exit, timed_out, truncated}.",
 				InputSchema: runCommandSchema,
 			},
 		},
@@ -304,12 +304,9 @@ func (s *Server) toolListCommands() (any, *rpcError) {
 	out := make([]commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
 		entry := commandEntry{
-			Path:        r.Path,
+			Command:     r.CommandSource,
 			As:          r.As,
 			Description: sanitizeDescription(r.Description),
-		}
-		if r.ArgsSource != nil {
-			entry.ArgsPatterns = r.ArgsSource
 		}
 		if r.Timeout > 0 {
 			entry.TimeoutSecs = r.Timeout.Seconds()

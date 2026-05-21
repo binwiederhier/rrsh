@@ -4,11 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/user"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/mcp"
-	"github.com/binwiederhier/rrsh/util"
 )
 
 // runServe is the default code path. rrsh exposes a JSON-RPC server over
@@ -50,7 +50,17 @@ func runServe(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	log := logger.New()
+	// Resolve the current user up front: every downstream security
+	// decision (self vs target user, syslog tagging) needs it, and there
+	// is no useful fallback — if the kernel can't tell us who we are,
+	// fail closed rather than guess.
+	u, err := user.Current()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
+		os.Exit(exitGeneric)
+	}
+
+	log := logger.New(u.Username)
 	defer log.Close()
 
 	cfg, err := config.Load(resolveConfigPath(*configFile))
@@ -65,7 +75,7 @@ func runServe(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	srv := mcp.New(cfg, log, util.CurrentUser(), rrshBin, os.Stdin, os.Stdout)
+	srv := mcp.New(cfg, log, u.Username, rrshBin, os.Stdin, os.Stdout)
 	if err := srv.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
@@ -104,18 +114,21 @@ guidance — read it first.
 }
 
 // sshTargetHint returns user@host derived from the environment, falling
-// back to a generic placeholder. The goal is to make the example
-// copy-pastable for the caller who just hit the error.
+// back to generic placeholders. We deliberately tolerate user.Current
+// failures here — we're already printing an error and exiting; a missing
+// username just means the example uses "<user>" instead of being
+// copy-pasteable. The fatal-on-error policy applies to the live JSON-RPC
+// path, not the help text.
 func sshTargetHint() string {
-	user := util.CurrentUser()
+	username := "<user>"
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		username = u.Username
+	}
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		host = "<host>"
 	}
-	if user == "" || user == util.UnknownUser {
-		user = "<user>"
-	}
-	return user + "@" + host
+	return username + "@" + host
 }
 
 // isTerminal returns true if f is connected to a terminal (i.e. a

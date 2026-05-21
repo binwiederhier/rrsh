@@ -19,7 +19,7 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 | `exec/` | Runs single commands or native Go pipelines. `exec/exec.go` holds the `Execer` type and methods; `exec/types.go` holds the package-private consts (`defaultTimeout`, `maxOutputBytes`, `timeoutExitCode`) and exported `Stage`/`Result` types. Captures stdout/stderr via `util.CappedBuffer`. |
 | `mcp/` | MCP server: NDJSON framing, JSON-RPC 2.0 envelope, two-tool API. `mcp/types.go` holds wire types + JSON-RPC error codes; `mcp/server.go` holds the dispatch loop and handlers. |
 | `logger/` | Syslog wrapper for `auth.info`/`auth.warning` ALLOWED/DENIED records. |
-| `util/` | Tiny stdlib-only helpers shared across packages. `util/util.go` has `CurrentUser` + the `UnknownUser` const; `util/buffer.go` has `CappedBuffer` (used by `exec` for bounded subprocess output). |
+| `util/` | Tiny stdlib-only helpers. Currently just `util/buffer.go` (`CappedBuffer`, used by `exec` for bounded subprocess output). |
 | `pkg/` | Files that the package installs, mirroring their destination paths. `pkg/etc/rrsh/rrsh.json.example`, `pkg/etc/sudoers.d/rrsh`, `pkg/var/lib/rrsh/.hushlogin`. |
 | `scripts/` | dpkg maintainer scripts (`postinst.sh`, `postrm.sh`). |
 | `dist/` | goreleaser output (not committed). |
@@ -49,6 +49,8 @@ Two independent knobs gate elevation:
 - All source files end with a newline.
 - Comments explain *why*, not *what*; identifiers carry the *what*.
 - The privileged half deliberately depends on as few packages as possible. Small duplications (e.g. `resolveAllowedUsers` exists in both `cmd/sudo.go` and `mcp/server.go`) are kept rather than introducing imports that pull JSON-RPC code into the root trust boundary.
+- User-identity lookups (`os/user.Current()`) happen at the cmd-layer entry points only — the application fails closed if it cannot determine the current user. Lower-level packages take `username string` as a parameter instead of doing their own lookups.
+- Config schema: `command` is a list of regexes. Element 0 matches the binary path, elements 1..N-1 match argv 1-for-1. Multiple rules can share a `command[0]` to express alternative argv shapes; the matcher tries them in declaration order.
 - `errors.Is`/`errors.As` for sentinel-error checks (not `err == io.EOF`).
 - Tests are colocated with the package they test.
 

@@ -11,6 +11,21 @@ import (
 	"github.com/binwiederhier/rrsh/logger"
 )
 
+// testRule mirrors what config.convertRule produces: every entry is
+// auto-anchored with ^(?:…)$. Defaults `As` to [self]; callers override
+// after construction when they need elevation.
+func testRule(command ...string) config.CommandRule {
+	patterns := make([]*regexp.Regexp, len(command))
+	for i, p := range command {
+		patterns[i] = regexp.MustCompile("^(?:" + p + ")$")
+	}
+	return config.CommandRule{
+		CommandPatterns: patterns,
+		CommandSource:   append([]string(nil), command...),
+		As:              []string{config.SelfUser},
+	}
+}
+
 // testServer spins up an mcp.Server backed by a small default allowlist
 // and feeds it the given NDJSON request stream. It returns the captured
 // stdout (the server's response stream) and any transport-level error
@@ -19,16 +34,22 @@ func testServer(t *testing.T, in string) (*bytes.Buffer, error) {
 	t.Helper()
 	cfg := &config.Config{
 		Commands: []config.CommandRule{
-			{Path: "/bin/echo", As: []string{config.SelfUser}, Description: "Echo arguments."},
-			{Path: "/bin/cat", As: []string{config.SelfUser}, Description: "Concatenate input."},
-			{Path: "/bin/false", As: []string{config.SelfUser}},
-			{Path: "/usr/bin/grep", ArgsPatterns: []*regexp.Regexp{regexp.MustCompile(`^(?:.*)$`)}, As: []string{config.SelfUser}, Description: "Filter lines."},
+			testRule("/bin/echo", ".*"),       // /bin/echo + one argv
+			testRule("/bin/echo"),             // /bin/echo + zero argv
+			testRule("/bin/echo", ".*", ".*"), // /bin/echo + two argv
+			testRule("/bin/cat"),
+			testRule("/bin/cat", ".*"),
+			testRule("/bin/false"),
+			testRule("/usr/bin/grep", ".*"),
 		},
 	}
+	cfg.Commands[0].Description = "Echo one argument."
+	cfg.Commands[3].Description = "Concatenate stdin."
+	cfg.Commands[6].Description = "Filter lines."
 	out := &bytes.Buffer{}
-	// logger.New() opens syslog which may not be available in tests; we
+	// logger.New("tester") opens syslog which may not be available in tests; we
 	// tolerate nil writer, which the logger does. Just construct one.
-	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
 	err := srv.Serve()
 	return out, err
 }
@@ -101,7 +122,7 @@ func TestServer_ListCommands(t *testing.T) {
 	if !strings.Contains(text, "/bin/echo") {
 		t.Errorf("expected /bin/echo in allowlist, got: %s", text)
 	}
-	if !strings.Contains(text, "Echo arguments.") {
+	if !strings.Contains(text, "Echo one argument.") {
 		t.Errorf("expected description in allowlist, got: %s", text)
 	}
 }
@@ -311,12 +332,12 @@ func TestServer_Initialize_InstructionsAndName(t *testing.T) {
 		Name:         "ntfy-prod-1",
 		Instructions: "You are on the ntfy prod box. Use list_commands to discover what is allowed.",
 		Commands: []config.CommandRule{
-			{Path: "/bin/echo", As: []string{config.SelfUser}},
+			testRule("/bin/echo"),
 		},
 	}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
-	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve error: %v", err)
 	}
@@ -370,15 +391,16 @@ func TestServer_RunCommand_OversizedRequestRejected(t *testing.T) {
 
 func TestServer_RunCommand_ElevationDeniedWhenSudoDisabled(t *testing.T) {
 	t.Parallel()
+	echoRoot := testRule("/bin/echo", ".*")
+	echoRoot.As = []string{"root"}
+	echoRoot.Description = "Echo as root."
 	cfg := &config.Config{
-		Sudo: false, // explicit, though it's the default
-		Commands: []config.CommandRule{
-			{Path: "/bin/echo", As: []string{"root"}, Description: "Echo as root."},
-		},
+		Sudo:     false, // explicit, though it's the default
+		Commands: []config.CommandRule{echoRoot},
 	}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","x"],"as":"root"}}}` + "\n"
-	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -399,15 +421,15 @@ func TestServer_RunCommand_ElevationAllowedWhenSudoEnabled(t *testing.T) {
 	// we can verify the gate passes — the call should reach the executor
 	// (which then fails to exec sudo, which surfaces as a non-zero exit).
 	// The point is: no "elevation disabled" message.
+	echoRoot := testRule("/bin/echo", ".*")
+	echoRoot.As = []string{"root"}
 	cfg := &config.Config{
-		Sudo: true,
-		Commands: []config.CommandRule{
-			{Path: "/bin/echo", As: []string{"root"}},
-		},
+		Sudo:     true,
+		Commands: []config.CommandRule{echoRoot},
 	}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_command","arguments":{"argv":["/bin/echo","x"],"as":"root"}}}` + "\n"
-	srv := New(cfg, logger.New(), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
+	srv := New(cfg, logger.New("tester"), "tester", "/usr/bin/rrsh", strings.NewReader(in), out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}

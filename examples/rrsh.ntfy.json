@@ -1,238 +1,201 @@
 {
   "name": "ntfy",
-  "instructions": "You are connected to the 'ntfy' host via rrsh, a read-only diagnostic gateway. Call list_commands first — the `args_patterns` list on each rule is the per-argv-element regex contract: your argv must have exactly the same length AND each element must match the corresponding pattern. Multiple rules with the same path describe alternative argv shapes (e.g. `ps aux` vs `ps -ef` are two separate rules). Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) — you do NOT need to pass {\"as\":\"root\"} for those.\n\nLOG LAYOUT on this host:\n  /var/log/ntfy.log                    — main ntfy server log (current)\n  /var/log/ntfy.log.N.gz               — daily rotations, all gzipped (logrotate has no delaycompress for ntfy)\n  /var/log/ntfy-goroutine.log          — periodic goroutine dumps written by emergency-restart cron (every 2 min)\n  /var/log/ntfy-health-check.log       — synthetic health-check probe output (cron, every 2 min)\n  /var/log/ntfy-database-backup.log    — hourly backup script output\n  /var/log/nginx/access.log            — 2xx/3xx HTTP responses\n  /var/log/nginx/access.log.1          — yesterday's, uncompressed; .2.gz onwards are gzipped\n  /var/log/nginx/access_error.log      — 4xx/5xx HTTP responses (scan/attack noise lands here)\n  /var/log/nginx/access_error.log.N    — same rotation pattern (.1 uncompressed, .N.gz compressed)\n  /var/log/nginx/error.log             — nginx's own error log + rotations\n  /var/log/auth.log                    — SSH attempts, sudo activity, login session events\n  /var/log/syslog                      — general system log\n\nFor uncompressed .log and .log.1 files, use cat/tail/head/grep/wc. For gzipped rotations (*.gz), use zcat or zgrep — ztail and zhead do NOT exist on this system, so use a pipeline like `zcat /var/log/ntfy.log.5.gz | tail -n 200` when you need the last N lines of a compressed rotation.\n\nFor systemd unit logs (live, in-memory journal), use journalctl with -u {ntfy,nginx,ssh,sshd}. systemctl status / is-active / show inspect unit state.\n\nfail2ban-client status shows active jails and currently-banned IPs. lastb shows failed SSH attempts, last shows successful logins.\n\nFor Prometheus metrics, run `ip addr` first to find the host's 10.x address, then `curl -sS http://10.X.Y.Z:9090/metrics` (it does NOT bind to localhost).\n\nNo write access. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
+  "instructions": "You are connected to the 'ntfy' host via rrsh, a read-only diagnostic gateway. Call list_commands first — each rule's `command` field is a list of regexes (element 0 matches the binary path, elements 1..N-1 match argv 1-for-1). Your argv length must equal len(command)-1 AND each element must match its corresponding pattern. Multiple rules can share a command[0] regex to describe alternative argv shapes (e.g. `ps aux` and `ps -ef` are two separate rules). Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) — you do NOT need to pass {\"as\":\"root\"} for those.\n\nLOG LAYOUT on this host:\n  /var/log/ntfy.log                    — main ntfy server log (current)\n  /var/log/ntfy.log.N.gz               — daily rotations, all gzipped (logrotate has no delaycompress for ntfy)\n  /var/log/ntfy-goroutine.log          — periodic goroutine dumps written by emergency-restart cron (every 2 min)\n  /var/log/ntfy-health-check.log       — synthetic health-check probe output (cron, every 2 min)\n  /var/log/ntfy-database-backup.log    — hourly backup script output\n  /var/log/nginx/access.log            — 2xx/3xx HTTP responses\n  /var/log/nginx/access.log.1          — yesterday's, uncompressed; .2.gz onwards are gzipped\n  /var/log/nginx/access_error.log      — 4xx/5xx HTTP responses (scan/attack noise lands here)\n  /var/log/nginx/access_error.log.N    — same rotation pattern (.1 uncompressed, .N.gz compressed)\n  /var/log/nginx/error.log             — nginx's own error log + rotations\n  /var/log/auth.log                    — SSH attempts, sudo activity, login session events\n  /var/log/syslog                      — general system log\n\nFor uncompressed .log and .log.1 files, use cat/tail/head/grep/wc. For gzipped rotations (*.gz), use zcat or zgrep — ztail and zhead do NOT exist, so use a pipeline like `zcat /var/log/ntfy.log.5.gz | tail -n 200`.\n\nFor systemd unit logs (live, in-memory journal), use journalctl with -u {ntfy,nginx,ssh,sshd}. systemctl status / is-active inspects unit state.\n\nfail2ban-client status shows active jails and currently-banned IPs. lastb shows failed SSH attempts, last shows successful logins.\n\nFor Prometheus metrics, run `ip addr` first to find the host's 10.x address, then `curl -sS http://10.X.Y.Z:9090/metrics` (it does NOT bind to localhost).\n\nNo write access. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
   "sudo": true,
   "commands": [
     {
-      "path": "/usr/bin/whoami",
+      "command": ["/usr/bin/whoami"],
       "description": "Show the effective username."
     },
     {
-      "path": "/usr/bin/id",
-      "args": [],
+      "command": ["/usr/bin/id"],
       "description": "Show the user/group identity (uid, gid, groups). No args."
     },
     {
-      "path": "/usr/bin/hostname",
+      "command": ["/usr/bin/hostname"],
       "description": "Print the system hostname."
     },
     {
-      "path": "/usr/bin/uptime",
+      "command": ["/usr/bin/uptime"],
       "description": "Show how long the system has been up and the load average."
     },
     {
-      "path": "/usr/bin/uname",
-      "args": ["-a"],
+      "command": ["/usr/bin/uname", "-a"],
       "description": "Print kernel/OS info. Only `-a` is permitted."
     },
     {
-      "path": "/usr/bin/ps",
-      "args": ["aux"],
+      "command": ["/usr/bin/ps", "aux"],
       "description": "List processes (BSD-style: ps aux)."
     },
     {
-      "path": "/usr/bin/ps",
-      "args": ["auxf"],
+      "command": ["/usr/bin/ps", "auxf"],
       "description": "List processes with forest view (ps auxf)."
     },
     {
-      "path": "/usr/bin/ps",
-      "args": ["-ef"],
+      "command": ["/usr/bin/ps", "-ef"],
       "description": "List processes (System V-style: ps -ef)."
     },
     {
-      "path": "/usr/bin/ps",
-      "args": ["-eo", "(pid|user|comm|stat|etime|pcpu|pmem|rss|vsz|tty|nice)(,(pid|user|comm|stat|etime|pcpu|pmem|rss|vsz|tty|nice))*"],
-      "description": "List processes with custom format. Allowed columns: pid, user, comm, stat, etime, pcpu, pmem, rss, vsz, tty, nice. Avoids the `args`/`command` columns that would leak full argv (and any secrets in it)."
+      "command": ["/usr/bin/ps", "-eo", "(pid|user|comm|stat|etime|pcpu|pmem|rss|vsz|tty|nice)(,(pid|user|comm|stat|etime|pcpu|pmem|rss|vsz|tty|nice))*"],
+      "description": "List processes with custom format. Allowed columns: pid, user, comm, stat, etime, pcpu, pmem, rss, vsz, tty, nice. Avoids the `args`/`command` columns that would leak full argv."
     },
     {
-      "path": "/usr/bin/top",
-      "args": ["-bn1"],
+      "command": ["/usr/bin/top", "-bn1"],
       "description": "Take one batch-mode snapshot of top (`-bn1`)."
     },
     {
-      "path": "/usr/bin/pstree",
+      "command": ["/usr/bin/pstree"],
       "description": "Show the process tree."
     },
     {
-      "path": "/usr/bin/free",
+      "command": ["/usr/bin/free"],
       "description": "Report memory usage. No args = default human-readable layout."
     },
     {
-      "path": "/usr/bin/free",
-      "args": ["-(h|m|g)"],
+      "command": ["/usr/bin/free", "-(h|m|g)"],
       "description": "Report memory usage with a specific unit (`-h`, `-m`, or `-g`)."
     },
     {
-      "path": "/usr/bin/df",
+      "command": ["/usr/bin/df"],
       "description": "Report filesystem space usage. No args = default columns."
     },
     {
-      "path": "/usr/bin/df",
-      "args": ["-(h|i)"],
+      "command": ["/usr/bin/df", "-(h|i)"],
       "description": "Report filesystem space usage with `-h` (human-readable) or `-i` (inodes)."
     },
     {
-      "path": "/usr/bin/du",
-      "args": ["-sh", "/var/log(/[^./][^/]*)*"],
-      "description": "Summarize disk usage under /var/log (or a subpath of it that does not start with `.`). Blocks `..` traversal."
+      "command": ["/usr/bin/du", "-sh", "/var/log(/[^./][^/]*)*"],
+      "description": "Summarize disk usage under /var/log (or a subpath that does not start with `.`). Blocks `..` traversal."
     },
     {
-      "path": "/usr/bin/lsblk",
+      "command": ["/usr/bin/lsblk"],
       "description": "List block devices."
     },
     {
-      "path": "/usr/sbin/ip",
-      "args": ["(addr|route|link)"],
+      "command": ["/usr/sbin/ip", "(addr|route|link)"],
       "description": "Show network state (one-word subcommands): addr, route, link."
     },
     {
-      "path": "/usr/bin/ss",
-      "args": ["-(t|u|tu)lnp"],
+      "command": ["/usr/bin/ss", "-(t|u|tu)lnp"],
       "description": "List listening sockets with PIDs. Allowed flag combos: -tlnp, -ulnp, -tulnp."
     },
     {
-      "path": "/usr/bin/ping",
-      "args": ["-c", "\\d+", "[a-zA-Z0-9][a-zA-Z0-9.-]*"],
+      "command": ["/usr/bin/ping", "-c", "\\d+", "[a-zA-Z0-9][a-zA-Z0-9.-]*"],
       "timeout": "30s",
       "description": "Ping a host a fixed number of times: -c <count> <host>. Host pattern excludes leading dots/dashes to discourage internal-net probing."
     },
     {
-      "path": "/usr/bin/dig",
-      "args": ["[a-zA-Z0-9][a-zA-Z0-9.-]*"],
-      "description": "DNS lookup via system resolver (single hostname). No @server allowed — that would be a DNS exfil channel."
+      "command": ["/usr/bin/dig", "[a-zA-Z0-9][a-zA-Z0-9.-]*"],
+      "description": "DNS lookup via system resolver (single hostname). No @server allowed — would be a DNS exfil channel."
     },
     {
-      "path": "/usr/bin/dig",
-      "args": ["[a-zA-Z0-9][a-zA-Z0-9.-]*", "(A|AAAA|MX|TXT|CNAME|NS|SOA|PTR)"],
+      "command": ["/usr/bin/dig", "[a-zA-Z0-9][a-zA-Z0-9.-]*", "(A|AAAA|MX|TXT|CNAME|NS|SOA|PTR)"],
       "description": "DNS lookup of a specific record type. No @server."
     },
     {
-      "path": "/usr/bin/curl",
-      "args": ["-sS", "http://10(\\.\\d{1,3}){3}:9090/metrics"],
+      "command": ["/usr/bin/curl", "-sS", "http://10(\\.\\d{1,3}){3}:9090/metrics"],
       "timeout": "15s",
       "description": "Fetch the Prometheus node_exporter metrics endpoint. The metrics endpoint is bound to the host's private 10.x interface (NOT localhost) — use `ip addr` first to discover the right address."
     },
     {
-      "path": "/usr/bin/last",
-      "args": [],
+      "command": ["/usr/bin/last"],
       "as": ["root"],
       "description": "Show recent successful logins from /var/log/wtmp. No args = full list."
     },
     {
-      "path": "/usr/bin/last",
-      "args": ["-n", "\\d+"],
+      "command": ["/usr/bin/last", "-n", "\\d+"],
       "as": ["root"],
       "description": "Show the last N successful logins."
     },
     {
-      "path": "/usr/bin/lastb",
-      "args": [],
+      "command": ["/usr/bin/lastb"],
       "as": ["root"],
       "description": "Show recent FAILED login attempts from /var/log/btmp. No args = full list."
     },
     {
-      "path": "/usr/bin/lastb",
-      "args": ["-n", "\\d+"],
+      "command": ["/usr/bin/lastb", "-n", "\\d+"],
       "as": ["root"],
       "description": "Show the last N failed login attempts. Useful for spotting SSH brute-force activity."
     },
     {
-      "path": "/usr/bin/fail2ban-client",
-      "args": ["status"],
+      "command": ["/usr/bin/fail2ban-client", "status"],
       "as": ["root"],
       "description": "List active fail2ban jails."
     },
     {
-      "path": "/usr/bin/fail2ban-client",
-      "args": ["status", "[\\w-]+"],
+      "command": ["/usr/bin/fail2ban-client", "status", "[\\w-]+"],
       "as": ["root"],
       "description": "Show currently-banned IPs in a specific fail2ban jail (e.g. sshd, nginx-400)."
     },
     {
-      "path": "/usr/bin/journalctl",
-      "args": ["-u", "(ntfy|nginx|ssh|sshd)"],
+      "command": ["/usr/bin/journalctl", "-u", "(ntfy|nginx|ssh|sshd)"],
       "as": ["root"],
       "description": "Show full systemd journal for ntfy, nginx, ssh, or sshd."
     },
     {
-      "path": "/usr/bin/journalctl",
-      "args": ["--no-pager", "-u", "(ntfy|nginx|ssh|sshd)"],
+      "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)"],
       "as": ["root"],
       "description": "Same as above, but with --no-pager (better for scripted reads)."
     },
     {
-      "path": "/usr/bin/journalctl",
-      "args": ["--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "-n", "\\d+"],
+      "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "-n", "\\d+"],
       "as": ["root"],
       "description": "Show the last N entries for ntfy, nginx, ssh, or sshd."
     },
     {
-      "path": "/usr/bin/journalctl",
-      "args": ["--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "--since", ".+"],
+      "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "--since", ".+"],
       "as": ["root"],
-      "description": "Show entries since <expr> (any time-spec gawk accepts, e.g. '1 hour ago')."
+      "description": "Show entries since <expr> (any time-spec journalctl accepts, e.g. '1 hour ago')."
     },
     {
-      "path": "/usr/bin/tail",
-      "args": ["-n", "\\d+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
+      "command": ["/usr/bin/tail", "-n", "\\d+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
-      "description": "Tail the last N lines of an uncompressed log file under /var/log. Covers ntfy*.log, nginx/*.log, syslog, auth.log, plus their .1 (uncompressed) rotations. For .gz use zcat | tail."
+      "description": "Tail the last N lines of an uncompressed log file under /var/log. Covers ntfy*.log, nginx/*.log, syslog, auth.log, plus their .1 rotations. For .gz use zcat | tail."
     },
     {
-      "path": "/usr/bin/head",
-      "args": ["-n", "\\d+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
+      "command": ["/usr/bin/head", "-n", "\\d+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
-      "description": "Read the first N lines of an uncompressed log file. Same path coverage as tail."
+      "description": "Read the first N lines of an uncompressed log file."
     },
     {
-      "path": "/usr/bin/cat",
-      "args": ["/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
+      "command": ["/usr/bin/cat", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
-      "description": "Dump an uncompressed log file. Same path coverage as tail. For .gz use zcat."
+      "description": "Dump an uncompressed log file. For .gz use zcat."
     },
     {
-      "path": "/usr/bin/zcat",
-      "args": ["/var/log/(ntfy[^/]*\\.log|nginx/[^/]+\\.log|syslog|auth\\.log)\\.\\d+\\.gz"],
+      "command": ["/usr/bin/zcat", "/var/log/(ntfy[^/]*\\.log|nginx/[^/]+\\.log|syslog|auth\\.log)\\.\\d+\\.gz"],
       "as": ["root"],
-      "description": "Dump a gzipped log rotation (*.log.N.gz). Pipe through tail/head for the last/first N lines: `zcat /var/log/ntfy.log.5.gz | tail -n 200`."
+      "description": "Dump a gzipped log rotation (*.log.N.gz). Pipe through tail/head for the last/first N lines."
     },
     {
-      "path": "/usr/bin/ls",
-      "args": ["-la?h?", "/var/log(/[^./][^/]*)*"],
+      "command": ["/usr/bin/ls", "-la?h?", "/var/log(/[^./][^/]*)*"],
       "description": "List /var/log or a subpath. `-l[a][h]` for the flag, blocks `..` in the path."
     },
     {
-      "path": "/usr/bin/wc",
-      "args": ["-l", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
+      "command": ["/usr/bin/wc", "-l", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
-      "description": "Count lines in an uncompressed log file. Same path coverage as tail."
+      "description": "Count lines in an uncompressed log file."
     },
     {
-      "path": "/usr/bin/grep",
-      "args": ["-i", ".+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
+      "command": ["/usr/bin/grep", "-i", ".+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
-      "description": "Case-insensitive grep against an uncompressed log file. Pattern is the second element; path the third. For .gz use zgrep."
+      "description": "Case-insensitive grep against an uncompressed log file: `-i <pattern> <path>`. For .gz use zgrep."
     },
     {
-      "path": "/usr/bin/zgrep",
-      "args": ["-i", ".+", "/var/log/(ntfy[^/]*\\.log|nginx/[^/]+\\.log|syslog|auth\\.log)\\.\\d+\\.gz"],
+      "command": ["/usr/bin/zgrep", "-i", ".+", "/var/log/(ntfy[^/]*\\.log|nginx/[^/]+\\.log|syslog|auth\\.log)\\.\\d+\\.gz"],
       "as": ["root"],
       "description": "Case-insensitive grep against a gzipped log rotation."
     },
     {
-      "path": "/usr/bin/systemctl",
-      "args": ["(status|is-active)", "(ntfy|nginx)"],
+      "command": ["/usr/bin/systemctl", "(status|is-active)", "(ntfy|nginx)"],
       "description": "Inspect a systemd unit's runtime state (status or is-active for ntfy or nginx)."
     },
     {
-      "path": "/usr/bin/systemctl",
-      "args": ["list-timers"],
+      "command": ["/usr/bin/systemctl", "list-timers"],
       "description": "List systemd timers."
     },
     {
-      "path": "/usr/bin/ntfy",
-      "args": ["(user|access|tier)", "list"],
+      "command": ["/usr/bin/ntfy", "(user|access|tier)", "list"],
       "description": "Inspect ntfy state. Permitted: `user list`, `access list`, `tier list`."
     }
   ]

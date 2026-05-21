@@ -3,13 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
-	"github.com/binwiederhier/rrsh/util"
 )
 
 // envSudoUser is the environment variable sudo sets to the original
@@ -39,7 +39,17 @@ func runSudo(args []string) {
 		os.Exit(exitDenied)
 	}
 
-	log := logger.New()
+	// Resolve the effective user before doing anything else. The
+	// privileged half's only purpose is to enforce the rule's `as:`
+	// list against this identity; if we can't determine it, refuse
+	// rather than guess.
+	u, err := user.Current()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
+		os.Exit(exitGeneric)
+	}
+
+	log := logger.New(u.Username)
 	defer log.Close()
 
 	// Hardcoded path — we are root (or another target user). The caller is
@@ -64,7 +74,7 @@ func runSudo(args []string) {
 	argv := args[1:]
 	input := joinForLog(path, argv)
 
-	me := util.CurrentUser()
+	me := u.Username
 	origin := os.Getenv(envSudoUser)
 	if origin == "" {
 		// Called directly without /usr/bin/sudo in front. No actual

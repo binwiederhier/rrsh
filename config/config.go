@@ -7,28 +7,37 @@
 //	  "instructions": "host-specific...",   // optional, MCP initialize.instructions
 //	  "sudo":         false,                // master switch for elevation
 //	  "commands": [
-//	    { "path": "/usr/bin/whoami" },
-//	    { "path": "/usr/bin/ls",     "args": ["-la", "/var/log/.*"] },
-//	    { "path": "/usr/bin/ping",   "args": ["-c", "\\d+", ".+"], "timeout": "30s" },
-//	    { "path": "/bin/systemctl",  "args": ["restart", "ntfy"], "as": ["root"] },
-//	    { "path": "/usr/bin/journalctl", "args": ["-u", "ntfy"], "as": ["self", "root"] }
+//	    { "command": ["/usr/bin/whoami"] },
+//	    { "command": ["/usr/bin/ls", "-la", "/var/log/.*"] },
+//	    { "command": ["/usr/bin/ping", "-c", "\\d+", ".+"], "timeout": "30s" },
+//	    { "command": ["/bin/systemctl", "restart", "ntfy"], "as": ["root"] },
+//	    { "command": ["/usr/bin/journalctl", "-u", "ntfy"], "as": ["self", "root"] }
 //	  ]
 //	}
 //
 // Fields on each command entry:
 //
-//   - path     absolute path to the binary (required)
-//   - args     list of regexes, one per argv element (default: any args allowed)
+//   - command  list of regexes (required, length >= 1). Element 0 matches
+//              the binary path; elements 1..N-1 match argv[0..N-2].
+//              All patterns are auto-anchored (wrapped in ^(?:…)$).
 //   - timeout  per-command timeout, e.g. "30s" (default: DefaultTimeout)
 //   - as       list of users the command may run as (default: ["self"])
+//   - description  free text shown to AI via list_commands
 //
-// The `args` field is a list of regular expressions, one per argv element.
-// A call is allowed only if argv has exactly the same length AND every
-// element matches its corresponding regex. Patterns are auto-anchored
-// (wrapped in ^(?:…)$). Multiple rules with the same `path` are allowed —
-// the matcher tries each in order and takes the first whose `args` shape
-// matches. Use this to express alternative argv shapes (e.g. `ps aux`
-// vs `ps -eo <fmt>`).
+// A call matches a rule when:
+//   - the AI's path matches command[0]'s regex; AND
+//   - argv has exactly len(command)-1 elements; AND
+//   - each argv[i] matches command[i+1]'s regex.
+//
+// Multiple rules with the same command[0] (e.g. literal "/usr/bin/ps")
+// are allowed — the matcher tries each in order and takes the first whose
+// shape matches. Use this to express alternative argv shapes (e.g.
+// `ps aux` vs `ps -ef` vs `ps -eo <fmt>`).
+//
+// Treating command[0] as a regex means an operator can write e.g.
+// "/usr/bin/(cat|head)" to share a rule across related binaries. The
+// matcher still requires the AI's path to start with `/` as
+// defense-in-depth against accidentally-permissive regexes.
 //
 // `self` in an `as` list resolves to the SSH user at runtime. Other entries are
 // real usernames (e.g. "root", "deploy"). Unknown fields are rejected — the
@@ -44,7 +53,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -53,22 +61,19 @@ import (
 // subcommand) or the current user (in the unprivileged process).
 const SelfUser = "self"
 
-// CommandRule is one allowlist entry. It is matched against an incoming
-// (path, argv) pair: Path must equal the absolute binary path, and — if
-// ArgsPatterns is non-nil — argv must have exactly len(ArgsPatterns)
-// elements with each element matching its corresponding regex.
+// CommandRule is one allowlist entry. The CommandPatterns slice is the
+// rule's only structural specification: index 0 matches the binary path,
+// and indices 1..N-1 match argv[0..N-2]. A call passes the rule iff its
+// path matches CommandPatterns[0], argv length equals len(CommandPatterns)-1,
+// and every argv[i] matches CommandPatterns[i+1].
 type CommandRule struct {
-	Path string
-	// ArgsPatterns is a slice of per-argv-element regexes (each
-	// auto-anchored). A nil slice means the rule accepts any argv shape;
-	// a non-nil (possibly empty) slice means argv length must equal
-	// len(ArgsPatterns) and ArgsPatterns[i].MatchString(argv[i]) for all i.
-	ArgsPatterns []*regexp.Regexp
-	// ArgsSource preserves the operator-authored patterns (before
-	// auto-anchoring) so list_commands can show what was originally
-	// written. nil when no `args` was specified.
-	ArgsSource []string
-	Timeout    time.Duration
+	// CommandPatterns is the compiled, auto-anchored regex list. Always
+	// has len >= 1 after Parse — the parser refuses empty commands.
+	CommandPatterns []*regexp.Regexp
+	// CommandSource preserves the operator-authored regex strings before
+	// auto-anchoring, used by list_commands to show what was written.
+	CommandSource []string
+	Timeout       time.Duration
 	// As lists the users the command may run as. SelfUser ("self") is the
 	// SSH user. Other entries are real usernames (e.g. "root", "deploy").
 	// Defaults to [SelfUser] when omitted in the config.
@@ -101,8 +106,8 @@ type Config struct {
 	Commands []CommandRule
 }
 
-// rawConfig mirrors the on-disk JSON shape. Strings for timeout/args keep the
-// JSON readable; we convert + validate after unmarshal.
+// rawConfig mirrors the on-disk JSON shape. We convert + validate after
+// unmarshal so the in-memory Config can hold compiled regexes.
 type rawConfig struct {
 	Name         string    `json:"name"`
 	Instructions string    `json:"instructions"`
@@ -111,15 +116,10 @@ type rawConfig struct {
 }
 
 type rawRule struct {
-	Path string `json:"path"`
-	// Args is *[]string so we can distinguish absent (nil pointer →
-	// any argv) from explicitly empty (`"args": []` → exactly zero
-	// elements). encoding/json sets the pointer to a real slice only
-	// when the field is present.
-	Args        *[]string `json:"args"`
-	Timeout     string    `json:"timeout"`
-	As          []string  `json:"as"`
-	Description string    `json:"description"`
+	Command     []string `json:"command"`
+	Timeout     string   `json:"timeout"`
+	As          []string `json:"as"`
+	Description string   `json:"description"`
 }
 
 // Load reads and parses the config file at path.
@@ -155,37 +155,32 @@ func Parse(data []byte) (*Config, error) {
 }
 
 func convertRule(r rawRule) (CommandRule, error) {
-	if r.Path == "" {
-		return CommandRule{}, fmt.Errorf("`path` is required")
+	if len(r.Command) == 0 {
+		return CommandRule{}, fmt.Errorf("`command` is required and must have at least one element (the path regex)")
 	}
-	if !strings.HasPrefix(r.Path, "/") {
-		return CommandRule{}, fmt.Errorf("`path` must be absolute, got %q", r.Path)
-	}
-	rule := CommandRule{Path: r.Path}
-	if r.Args != nil {
-		// Compile one auto-anchored regex per argv element. The wrap
-		// in ^(?:…)$ means MatchString — which is unanchored — cannot
-		// silently allow a substring; idempotent if the operator
-		// already wrote ^…$.
-		patterns := make([]*regexp.Regexp, len(*r.Args))
-		for i, src := range *r.Args {
-			re, err := regexp.Compile("^(?:" + src + ")$")
-			if err != nil {
-				return CommandRule{}, fmt.Errorf("invalid `args[%d]` regex for %s: %w", i, r.Path, err)
-			}
-			patterns[i] = re
+	// Compile each entry into an auto-anchored regex. Wrap in ^(?:…)$
+	// so MatchString — which is unanchored — cannot silently allow a
+	// substring; idempotent if the operator already wrote ^…$.
+	patterns := make([]*regexp.Regexp, len(r.Command))
+	for i, src := range r.Command {
+		re, err := regexp.Compile("^(?:" + src + ")$")
+		if err != nil {
+			return CommandRule{}, fmt.Errorf("invalid `command[%d]` regex %q: %w", i, src, err)
 		}
-		rule.ArgsPatterns = patterns
-		rule.ArgsSource = append([]string(nil), *r.Args...)
+		patterns[i] = re
+	}
+	rule := CommandRule{
+		CommandPatterns: patterns,
+		CommandSource:   append([]string(nil), r.Command...),
 	}
 	if r.Timeout != "" {
 		d, err := time.ParseDuration(r.Timeout)
 		if err != nil {
-			return CommandRule{}, fmt.Errorf("invalid `timeout` for %s: %w", r.Path, err)
+			return CommandRule{}, fmt.Errorf("invalid `timeout` for %s: %w", r.Command[0], err)
 		}
 		rule.Timeout = d
 	}
-	as, err := normalizeAs(r.Path, r.As)
+	as, err := normalizeAs(r.Command[0], r.As)
 	if err != nil {
 		return CommandRule{}, err
 	}
@@ -208,7 +203,9 @@ func convertRule(r rawRule) (CommandRule, error) {
 var validUsername = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}\$?$`)
 
 // normalizeAs validates an `as` list and defaults it to ["self"] when omitted.
-func normalizeAs(path string, as []string) ([]string, error) {
+// pathHint is the operator-written command[0] regex, used only for error
+// messages so the operator can identify which rule failed validation.
+func normalizeAs(pathHint string, as []string) ([]string, error) {
 	if len(as) == 0 {
 		return []string{SelfUser}, nil
 	}
@@ -216,13 +213,13 @@ func normalizeAs(path string, as []string) ([]string, error) {
 	out := make([]string, 0, len(as))
 	for _, u := range as {
 		if u == "" {
-			return nil, fmt.Errorf("`as` for %s has an empty entry", path)
+			return nil, fmt.Errorf("`as` for %s has an empty entry", pathHint)
 		}
 		if seen[u] {
-			return nil, fmt.Errorf("`as` for %s has duplicate entry %q", path, u)
+			return nil, fmt.Errorf("`as` for %s has duplicate entry %q", pathHint, u)
 		}
 		if u != SelfUser && !validUsername.MatchString(u) {
-			return nil, fmt.Errorf("`as` for %s has invalid username %q (expected POSIX login name)", path, u)
+			return nil, fmt.Errorf("`as` for %s has invalid username %q (expected POSIX login name)", pathHint, u)
 		}
 		seen[u] = true
 		out = append(out, u)

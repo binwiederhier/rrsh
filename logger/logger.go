@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"log/syslog"
 	"os"
-
-	"github.com/binwiederhier/rrsh/util"
 )
 
 // SyslogLogger writes ALLOWED/DENIED events to the system auth log.
@@ -17,17 +15,18 @@ type SyslogLogger struct {
 }
 
 // New opens a connection to the local syslog daemon under facility
-// auth/info with tag "rrsh". When the open fails (no syslog daemon
-// running, sandboxed container, etc.), New still returns a usable
-// logger whose write methods become no-ops, so the calling process
-// keeps working with logging downgraded to silent.
-func New() *SyslogLogger {
+// auth/info with tag "rrsh". The username is supplied by the caller —
+// the logger deliberately does not perform its own user lookup so the
+// trust boundary stays at the entry-point (cmd/) layer. When the syslog
+// open fails (no syslog daemon running, sandboxed container, etc.), New
+// still returns a usable logger whose write methods become no-ops.
+func New(username string) *SyslogLogger {
 	w, err := syslog.New(syslog.LOG_AUTH|syslog.LOG_INFO, "rrsh")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: warning: cannot open syslog: %v\n", err)
 		w = nil
 	}
-	return &SyslogLogger{w: w, user: util.CurrentUser()}
+	return &SyslogLogger{w: w, user: username}
 }
 
 // Allowed records a permitted command. asUser is the user the command will
@@ -64,4 +63,3 @@ func formatEvent(kind, user, asUser, input string) string {
 	}
 	return fmt.Sprintf("%s: user=%s as=%s cmd=%s", kind, user, asUser, input)
 }
-
