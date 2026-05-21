@@ -1,11 +1,16 @@
 // Package matcher validates an (absolute path, argv) pair against the
-// configured allowlist. The argv is matched as a single whitespace-joined
-// string against the rule's compiled regex — the regex is the contract
-// between the config author and the caller.
+// configured allowlist. Each rule declares a list of per-argv-element
+// regexes; a call matches when argv has the same length as the rule's
+// pattern list and every element passes its corresponding regex.
 //
-// There is no shell-string parsing here: argv arrives as a []string from a
-// JSON-RPC client, so quoting and metacharacters in argument values are
-// just bytes inside individual array elements, not parser hazards.
+// There is no shell-string parsing here: argv arrives as a []string from
+// a JSON-RPC client, so quoting and metacharacters in argument values
+// are just bytes inside individual array elements, not parser hazards.
+// Crucially, the per-element design means ["foo bar"] (one element with
+// a space) and ["foo","bar"] (two elements) are structurally distinct —
+// the matcher counts elements separately, so an operator's regex
+// designed for two args can't be silently fooled by a single element
+// joined into the same string.
 package matcher
 
 import (
@@ -28,24 +33,42 @@ func New(rules []config.CommandRule) *Matcher {
 }
 
 // Match returns the matching rule and true if (path, argv) is allowed by
-// any rule. Rules are scanned in order; the first rule whose Path equals
-// path decides the outcome — if its ArgsPattern does not match the
-// space-joined argv, the call is denied (later rules with the same path
-// are not tried). Returns nil, false otherwise.
+// any rule. Rules are scanned in declaration order; the first rule whose
+// Path equals path AND whose argv shape matches is returned.
+//
+// Multiple rules with the same Path are allowed and useful — e.g. one
+// rule for `ps aux` (one argv) and another for `ps -eo <fmt>` (two
+// argv) coexist as separate entries, and the matcher tries each in turn
+// until one accepts. If no rule matches, returns nil, false.
 func (m *Matcher) Match(path string, argv []string) (*config.CommandRule, bool) {
 	if !strings.HasPrefix(path, "/") {
 		return nil, false
 	}
-	args := strings.Join(argv, " ")
 	for i := range m.rules {
 		if m.rules[i].Path != path {
 			continue
-		} else if m.rules[i].ArgsPattern == nil {
-			return &m.rules[i], true
-		} else if m.rules[i].ArgsPattern.MatchString(args) {
+		}
+		if argvMatchesRule(argv, &m.rules[i]) {
 			return &m.rules[i], true
 		}
-		return nil, false
 	}
 	return nil, false
+}
+
+// argvMatchesRule reports whether argv satisfies a single rule's args
+// constraint. A nil ArgsPatterns means any argv; otherwise lengths must
+// match and every pattern[i] must accept argv[i].
+func argvMatchesRule(argv []string, rule *config.CommandRule) bool {
+	if rule.ArgsPatterns == nil {
+		return true
+	}
+	if len(argv) != len(rule.ArgsPatterns) {
+		return false
+	}
+	for i, pat := range rule.ArgsPatterns {
+		if !pat.MatchString(argv[i]) {
+			return false
+		}
+	}
+	return true
 }

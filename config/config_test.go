@@ -11,8 +11,8 @@ func TestParse_Valid(t *testing.T) {
 	data := []byte(`{
 		"commands": [
 			{ "path": "/usr/bin/whoami" },
-			{ "path": "/usr/bin/ls",   "args": "^-la$" },
-			{ "path": "/usr/bin/ping", "args": "^-c \\d+ .+$", "timeout": "60s" }
+			{ "path": "/usr/bin/ls",   "args": ["-la"] },
+			{ "path": "/usr/bin/ping", "args": ["-c", "\\d+", ".+"], "timeout": "60s" }
 		]
 	}`)
 	cfg, err := Parse(data)
@@ -22,53 +22,74 @@ func TestParse_Valid(t *testing.T) {
 	if len(cfg.Commands) != 3 {
 		t.Fatalf("got %d commands, want 3", len(cfg.Commands))
 	}
-	if cfg.Commands[0].Path != "/usr/bin/whoami" || cfg.Commands[0].ArgsPattern != nil {
+	// No-args rule: ArgsPatterns and ArgsSource both nil.
+	if cfg.Commands[0].Path != "/usr/bin/whoami" || cfg.Commands[0].ArgsPatterns != nil {
 		t.Errorf("command[0] = %+v", cfg.Commands[0])
 	}
-	// ArgsPattern is wrapped in ^(?:…)$ by the parser so we don't compare
-	// the literal source string. Instead exercise the behavior: the rule
-	// matches its intended argv shape and rejects extras.
-	if cfg.Commands[1].ArgsPattern == nil {
-		t.Errorf("command[1].ArgsPattern is nil")
+	// One-element rule: behavior check (auto-anchor in effect).
+	if len(cfg.Commands[1].ArgsPatterns) != 1 {
+		t.Fatalf("command[1] should have 1 pattern, got %d", len(cfg.Commands[1].ArgsPatterns))
 	}
-	if !cfg.Commands[1].ArgsPattern.MatchString("-la") {
-		t.Errorf("command[1] should match \"-la\"")
+	if !cfg.Commands[1].ArgsPatterns[0].MatchString("-la") {
+		t.Errorf("command[1] pattern should match \"-la\"")
 	}
-	if cfg.Commands[1].ArgsPattern.MatchString("-la /etc/passwd") {
-		t.Errorf("command[1] should not match \"-la /etc/passwd\" (auto-anchor in effect)")
+	if cfg.Commands[1].ArgsPatterns[0].MatchString("-la /etc/passwd") {
+		t.Errorf("command[1] pattern should not match \"-la /etc/passwd\" (auto-anchored)")
+	}
+	// Three-element rule with timeout.
+	if len(cfg.Commands[2].ArgsPatterns) != 3 {
+		t.Errorf("command[2] should have 3 patterns, got %d", len(cfg.Commands[2].ArgsPatterns))
 	}
 	if cfg.Commands[2].Timeout != 60*time.Second {
 		t.Errorf("command[2].Timeout = %v, want 60s", cfg.Commands[2].Timeout)
 	}
 }
 
-// TestParse_AutoAnchorsArgsRegex proves that an operator who writes a
-// rule without ^…$ anchors does NOT accidentally accept extra argv:
-// the matcher's MatchString is unanchored by default, so the parser
-// must wrap the pattern to fail closed.
-func TestParse_AutoAnchorsArgsRegex(t *testing.T) {
+// TestParse_EmptyArgsListMeansZeroArgv distinguishes the two "no args"
+// states: an absent `args` field allows any argv, while `"args": []`
+// explicitly requires zero argv elements.
+func TestParse_EmptyArgsListMeansZeroArgv(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
-		{"path": "/usr/bin/x", "args": "restart ntfy"}
+		{"path": "/usr/bin/x", "args": []}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	pat := cfg.Commands[0].ArgsPattern
-	if pat == nil {
-		t.Fatal("expected compiled pattern")
+	if cfg.Commands[0].ArgsPatterns == nil {
+		t.Error("explicit empty args list should produce non-nil ArgsPatterns (length 0)")
 	}
-	// The intended argv shape matches.
-	if !pat.MatchString("restart ntfy") {
-		t.Errorf("intended argv should match")
+	if len(cfg.Commands[0].ArgsPatterns) != 0 {
+		t.Errorf("expected 0 patterns, got %d", len(cfg.Commands[0].ArgsPatterns))
 	}
-	// Pre-fix vulnerability: extra suffix used to match too.
-	if pat.MatchString("restart ntfy; reboot") {
-		t.Errorf("extra suffix should NOT match after auto-anchoring")
+}
+
+// TestParse_AutoAnchorsArgsRegex proves that each per-element regex is
+// wrapped in ^(?:…)$ so an operator who writes "ntfy" without anchors
+// can't accidentally accept "ntfy-something" as an argv element.
+func TestParse_AutoAnchorsArgsRegex(t *testing.T) {
+	t.Parallel()
+	cfg, err := Parse([]byte(`{"commands": [
+		{"path": "/usr/bin/x", "args": ["restart", "ntfy"]}
+	]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	// Pre-fix vulnerability: extra prefix used to match too.
-	if pat.MatchString("foo restart ntfy") {
-		t.Errorf("extra prefix should NOT match after auto-anchoring")
+	patterns := cfg.Commands[0].ArgsPatterns
+	if len(patterns) != 2 {
+		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+	// The intended values match.
+	if !patterns[0].MatchString("restart") || !patterns[1].MatchString("ntfy") {
+		t.Errorf("intended argv should match its per-element patterns")
+	}
+	// Pre-fix vulnerability: extra characters in an element used to slip
+	// through because MatchString is unanchored. Auto-anchor blocks them.
+	if patterns[0].MatchString("restart-foo") {
+		t.Errorf("\"restart-foo\" should NOT match auto-anchored \"restart\"")
+	}
+	if patterns[1].MatchString("ntfy; reboot") {
+		t.Errorf("\"ntfy; reboot\" should NOT match auto-anchored \"ntfy\"")
 	}
 }
 
@@ -135,7 +156,7 @@ func TestParse_Description(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
 		{"path": "/usr/bin/whoami", "description": "Show effective username."},
-		{"path": "/bin/systemctl", "args": "^restart ntfy$", "as": ["root"]}
+		{"path": "/bin/systemctl", "args": ["restart", "ntfy"], "as": ["root"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -174,7 +195,7 @@ func TestParse_AsDefaults(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
 		{"path": "/usr/bin/whoami"},
-		{"path": "/usr/bin/ls", "args": "^-la$"}
+		{"path": "/usr/bin/ls", "args": ["-la"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -189,7 +210,7 @@ func TestParse_AsDefaults(t *testing.T) {
 func TestParse_AsList(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
-		{"path": "/bin/systemctl",     "args": "^restart .+$", "as": ["root"]},
+		{"path": "/bin/systemctl",     "args": ["restart", ".+"], "as": ["root"]},
 		{"path": "/usr/bin/whoami",    "as": ["self", "root"]},
 		{"path": "/bin/deploy.sh",     "as": ["self", "deploy"]}
 	]}`))
@@ -231,7 +252,7 @@ func TestParse_RejectsRelativePath(t *testing.T) {
 
 func TestParse_RejectsMissingPath(t *testing.T) {
 	t.Parallel()
-	_, err := Parse([]byte(`{"commands": [{"args": "^x$"}]}`))
+	_, err := Parse([]byte(`{"commands": [{"args": ["x"]}]}`))
 	if err == nil || !strings.Contains(err.Error(), "path") {
 		t.Fatalf("expected path-required error, got: %v", err)
 	}
@@ -239,7 +260,7 @@ func TestParse_RejectsMissingPath(t *testing.T) {
 
 func TestParse_RejectsBadRegex(t *testing.T) {
 	t.Parallel()
-	_, err := Parse([]byte(`{"commands": [{"path": "/bin/x", "args": "[invalid"}]}`))
+	_, err := Parse([]byte(`{"commands": [{"path": "/bin/x", "args": ["[invalid"]}]}`))
 	if err == nil {
 		t.Fatal("expected error for bad regex")
 	}

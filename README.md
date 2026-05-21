@@ -12,7 +12,7 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
 - Two MCP tools are exposed: `list_commands` (describes what is allowed, including per-rule `description` strings) and `run_command` (executes one command or a pipeline of them).
 - Arguments are passed as a real `argv` array — quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
-- Commands are matched against `/etc/rrsh/rrsh.json` rules (override with `--config=` or `$RRSH_CONFIG`). Each rule is an absolute binary path, optionally with a regex the joined argument string must match, a per-command timeout, and a list of users the command may run as.
+- Commands are matched against `/etc/rrsh/rrsh.json` rules (override with `--config=` or `$RRSH_CONFIG`). Each rule is an absolute binary path, optionally with a list of regexes (one per argv element), a per-command timeout, and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
 
 ## Install
@@ -95,16 +95,16 @@ From there Claude calls `initialize`, reads the `instructions` field for host co
     { "path": "/usr/bin/whoami",
       "description": "Show the effective username." },
 
-    { "path": "/usr/bin/journalctl", "args": "^-u .+$",
+    { "path": "/usr/bin/journalctl", "args": ["-u", ".+"],
       "description": "Show the journal for a systemd unit." },
 
-    { "path": "/usr/bin/ping",       "args": "^-c \\d+ .+$", "timeout": "60s",
+    { "path": "/usr/bin/ping",       "args": ["-c", "\\d+", ".+"], "timeout": "60s",
       "description": "Ping a host a fixed number of times. Allowed up to 60s." },
 
-    { "path": "/bin/systemctl",      "args": "^restart ntfy$",  "as": ["root"],
+    { "path": "/bin/systemctl",      "args": ["restart", "ntfy"],   "as": ["root"],
       "description": "Restart the ntfy systemd unit." },
 
-    { "path": "/bin/journalctl",     "args": "^-fu ntfy$",      "as": ["self", "root"],
+    { "path": "/bin/journalctl",     "args": ["-fu", "ntfy"],       "as": ["self", "root"],
       "description": "Follow the ntfy unit log." }
   ]
 }
@@ -126,23 +126,24 @@ Fields on each command entry:
 | Field         | Default          | Meaning                                                                          |
 | ------------- | ---------------- | -------------------------------------------------------------------------------- |
 | `path`        | required         | Absolute path to the binary.                                                     |
-| `args`        | any args allowed | Regex the joined argument string must match (anchored as written).               |
+| `args`        | any args allowed | List of regexes, one per argv element. The call's argv must have the same length AND each element must match its corresponding regex. An explicit empty list `[]` means "exactly zero argv". Patterns are auto-anchored. |
 | `timeout`     | `"30s"`          | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
-| `as`          | `["self"]`       | Users the command may run as. `self` resolves to the SSH user at runtime.        |
-| `description` | empty            | Free-text shown to Claude via `list_commands`. Treat it like an API doc string. |
+| `as`          | `["self"]`       | Users the command may run as. `self` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
+| `description` | empty            | Free-text shown to Claude via `list_commands`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
 Rules:
 
 - Paths must be absolute. Relative paths are rejected.
-- The args regex matches the space-joined argv slice (so a rule like `^-u .+$` allows `["-u", "ntfy"]`).
-- Rules are matched in order; the first rule with a matching `path` decides the outcome. If its args regex doesn't match, the call is denied — later rules with the same path are not tried.
+- The `args` list matches argv element-for-element. `["foo", "bar"]` (two argv elements) is structurally distinct from `["foo bar"]` (one element with a space) — the matcher counts elements separately, so an operator's regex written for two args can't be silently fooled by a single joined element. This is the structural guarantee that makes regex-on-argv safe against shell-injection-style attacks.
+- Each per-element regex is wrapped in `^(?:…)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` — both reject `"ntfy-extra"`.
+- **Multiple rules with the same `path` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected — typos in the config fail fast rather than silently weakening the policy.
 
 ## The two MCP tools
 
 ### `list_commands`
 
-No arguments. Returns the rule set as a JSON document inside the MCP text content. Each entry has `path`, `args_pattern` (omitted when none), `as`, `description`, and `timeout_seconds` (omitted when none). Claude calls this to learn what is allowed.
+No arguments. Returns the rule set as a JSON document inside the MCP text content. Each entry has `path`, `args_patterns` (the per-argv-element regex list, omitted when no constraint was set), `as`, `description`, and `timeout_seconds` (omitted when none). Claude calls this to learn what is allowed.
 
 ### `run_command`
 

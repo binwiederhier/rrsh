@@ -37,7 +37,7 @@ func TestExecute_PerRuleTimeout(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{
 		Path:        "/bin/sleep",
-		ArgsPattern: regexp.MustCompile(`^\d+$`),
+		ArgsPatterns: []*regexp.Regexp{regexp.MustCompile(`^(?:\d+)$`)},
 		Timeout:     100 * time.Millisecond,
 	}
 	start := time.Now()

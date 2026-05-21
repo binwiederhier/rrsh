@@ -22,7 +22,7 @@ func testServer(t *testing.T, in string) (*bytes.Buffer, error) {
 			{Path: "/bin/echo", As: []string{config.SelfUser}, Description: "Echo arguments."},
 			{Path: "/bin/cat", As: []string{config.SelfUser}, Description: "Concatenate input."},
 			{Path: "/bin/false", As: []string{config.SelfUser}},
-			{Path: "/usr/bin/grep", ArgsPattern: regexp.MustCompile(`.*`), As: []string{config.SelfUser}, Description: "Filter lines."},
+			{Path: "/usr/bin/grep", ArgsPatterns: []*regexp.Regexp{regexp.MustCompile(`^(?:.*)$`)}, As: []string{config.SelfUser}, Description: "Filter lines."},
 		},
 	}
 	out := &bytes.Buffer{}

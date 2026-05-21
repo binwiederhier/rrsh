@@ -133,10 +133,12 @@ type runCommandOutput struct {
 }
 
 // commandEntry is one element of the list_commands tool's output.
+// ArgsPatterns is the per-argv-element regex list from the config
+// (omitted when no `args` constraint was set).
 type commandEntry struct {
-	Path        string   `json:"path"`
-	ArgsPattern string   `json:"args_pattern,omitempty"`
-	As          []string `json:"as"`
-	Description string   `json:"description,omitempty"`
-	TimeoutSecs float64  `json:"timeout_seconds,omitempty"`
+	Path         string   `json:"path"`
+	ArgsPatterns []string `json:"args_patterns,omitempty"`
+	As           []string `json:"as"`
+	Description  string   `json:"description,omitempty"`
+	TimeoutSecs  float64  `json:"timeout_seconds,omitempty"`
 }
