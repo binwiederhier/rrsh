@@ -16,35 +16,23 @@ import (
 	"github.com/binwiederhier/rrsh/matcher"
 )
 
-// Version is overwritten by main at startup. Default kept for tests.
+// Version is the rrsh binary version, set by main at startup.
 var Version = "dev"
 
-// sudoBinary is the path to /usr/bin/sudo used for the elevation re-exec.
-const sudoBinary = "/usr/bin/sudo"
+const (
+	sudoBinary = "/usr/bin/sudo"
+	// When elevating to root we omit `-u root` to match standard sudo usage.
+	userRoot = "root"
+	// maxRequestBytes caps a single JSON-RPC line (DoS guard).
+	maxRequestBytes = 1 << 20 // 1 MiB
+	// maxPipelineStages caps processes spawned per pipeline (DoS guard).
+	maxPipelineStages = 16
+)
 
-// userRoot is sudo's implicit target — when we elevate to root we omit
-// the -u flag rather than passing `-u root`, matching the usual sudo
-// invocation pattern.
-const userRoot = "root"
-
-// maxRequestBytes caps the size of a single JSON-RPC request line. A
-// malicious client could otherwise pipe an unbounded blob and exhaust the
-// process's memory; bufio's ReadBytes grows the buffer to fit. Lines past
-// this cap are dropped and a parse error is returned.
-const maxRequestBytes = 1 << 20 // 1 MiB
-
-// maxPipelineStages caps how many stages a single run_command pipeline
-// may contain. Each stage spawns one process, so without a cap an
-// authenticated caller could trigger thousands of forks per request and
-// exhaust the host's PID / FD limits — a DoS against the whole host,
-// not just rrsh. 16 is comfortably more than any real diagnostic chain.
-const maxPipelineStages = 16
-
-// listCommandsSchema is the JSON Schema for the list_commands tool's
-// input (no arguments).
+// listCommandsSchema is the JSON Schema for list_commands (no inputs).
 var listCommandsSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
-// runCommandSchema is the JSON Schema for the run_command tool's input.
+// runCommandSchema is the JSON Schema for run_command's inputs.
 var runCommandSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -80,14 +68,13 @@ var runCommandSchema = json.RawMessage(`{
 
 // Server holds the dependencies needed to serve JSON-RPC requests.
 type Server struct {
-	cfg      *config.Config
-	matcher  *matcher.Matcher
-	execer *exec.Execer
-	log      *logger.SyslogLogger
-	self     string // current SSH user
-	rrshBin  string // path to this binary for elevation re-exec
-	in       *bufio.Reader
-	out      io.Writer
+	cfg     *config.Config
+	matcher *matcher.Matcher
+	log     *logger.SyslogLogger
+	self    string // current SSH user
+	rrshBin string // path to this binary for elevation re-exec
+	in      *bufio.Reader
+	out     io.Writer
 }
 
 // New constructs a Server. `self` is the current SSH user (what "self"
@@ -95,14 +82,13 @@ type Server struct {
 // sudo for elevation.
 func New(cfg *config.Config, log *logger.SyslogLogger, self, rrshBin string, in io.Reader, out io.Writer) *Server {
 	return &Server{
-		cfg:      cfg,
-		matcher:  matcher.New(cfg.Commands),
-		execer: exec.New(),
-		log:      log,
-		self:     self,
-		rrshBin:  rrshBin,
-		in:       bufio.NewReaderSize(in, 1<<20),
-		out:      out,
+		cfg:     cfg,
+		matcher: matcher.New(cfg.Commands),
+		log:     log,
+		self:    self,
+		rrshBin: rrshBin,
+		in:      bufio.NewReaderSize(in, 1<<20),
+		out:     out,
 	}
 }
 
@@ -242,9 +228,6 @@ func (s *Server) dispatch(method string, params json.RawMessage) (any, *rpcError
 	}
 }
 
-// handleInitialize responds to the MCP `initialize` handshake. The
-// returned protocol version is fixed (see protocolVersion); the server
-// name and instructions text are taken from the config.
 func (s *Server) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 	name := s.cfg.Name
 	if name == "" {
@@ -258,8 +241,6 @@ func (s *Server) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 	}, nil
 }
 
-// handleToolsList returns the static tool registry. Both schemas live at
-// the top of the file as package-level vars.
 func (s *Server) handleToolsList() (any, *rpcError) {
 	return &toolsListResult{
 		Tools: []toolDef{
@@ -277,9 +258,6 @@ func (s *Server) handleToolsList() (any, *rpcError) {
 	}, nil
 }
 
-// handleToolsCall routes a parsed `tools/call` request to the matching
-// tool implementation. Returns an InvalidParams error when the tool
-// name is unknown or the params envelope is malformed.
 func (s *Server) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	var p toolsCallParams
 	dec := json.NewDecoder(bytes.NewReader(params))
@@ -297,9 +275,6 @@ func (s *Server) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	}
 }
 
-// toolListCommands implements the `list_commands` MCP tool. It marshals
-// the configured allowlist into a structured JSON document inside one
-// text content block so AI consumers can introspect what is permitted.
 func (s *Server) toolListCommands() (any, *rpcError) {
 	out := make([]commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
@@ -320,11 +295,9 @@ func (s *Server) toolListCommands() (any, *rpcError) {
 	return &toolsCallResult{Content: []contentBlock{{Type: "text", Text: string(jsonText)}}}, nil
 }
 
-// toolRunCommand implements the `run_command` MCP tool. The arguments
-// must specify exactly one of `argv` (single command) or `pipeline`
-// (multi-stage). Validation errors and matcher denials surface as
-// `isError: true` content rather than transport-level RPC errors so
-// the AI can iterate without giving up the session.
+// toolRunCommand requires exactly one of `argv` or `pipeline`. Matcher
+// denials surface as isError content (not transport-level RPC errors)
+// so the AI can iterate within one session.
 func (s *Server) toolRunCommand(args json.RawMessage) (any, *rpcError) {
 	if len(args) == 0 {
 		return nil, &rpcError{Code: errInvalidParams, Message: "run_command requires arguments"}
@@ -338,7 +311,7 @@ func (s *Server) toolRunCommand(args json.RawMessage) (any, *rpcError) {
 	hasArgv := len(a.Argv) > 0
 	hasPipeline := len(a.Pipeline) > 0
 	if hasArgv == hasPipeline {
-		return s.deny("run_command requires exactly one of argv or pipeline", ""), nil
+		return s.deny("run_command requires exactly one of argv or pipeline"), nil
 	}
 
 	if hasArgv {
@@ -356,7 +329,7 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 	if !ok {
 		input := joinForLog(path, argv)
 		s.log.Denied(input, s.self)
-		return s.deny("command not allowed: "+input, ""), nil
+		return s.deny("command not allowed: "+input), nil
 	}
 
 	requested := a.As
@@ -367,7 +340,7 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 	if target == "" {
 		input := joinForLog(path, argv)
 		s.log.Denied(input, s.self)
-		return s.deny(fmt.Sprintf("%s not permitted to run as %s", input, displayTarget(requested, s.self)), ""), nil
+		return s.deny(fmt.Sprintf("%s not permitted to run as %s", input, displayTarget(requested, s.self))), nil
 	}
 
 	var stdin io.Reader
@@ -378,13 +351,13 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 	input := joinForLog(path, argv)
 	if target == s.self {
 		s.log.Allowed(input, s.self)
-		res := s.execer.Execute(path, argv, rule, stdin)
+		res := exec.Execute(path, argv, rule, stdin)
 		return runResultToTool(res), nil
 	}
 
 	if !s.cfg.Sudo {
 		s.log.Denied(input, s.self)
-		return s.deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)", ""), nil
+		return s.deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)"), nil
 	}
 
 	s.log.Allowed(input, target)
@@ -395,16 +368,16 @@ func (s *Server) runSingle(a runCommandArgs) (any, *rpcError) {
 // runPipeline executes a multi-stage pipeline.
 func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 	if a.As != "" {
-		return s.deny("top-level `as` is not valid with pipeline — set `as` per stage", ""), nil
+		return s.deny("top-level `as` is not valid with pipeline — set `as` per stage"), nil
 	}
 	if len(a.Pipeline) > maxPipelineStages {
-		return s.deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages), ""), nil
+		return s.deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages)), nil
 	}
 
 	stages := make([]exec.Stage, 0, len(a.Pipeline))
 	for i, step := range a.Pipeline {
 		if len(step.Argv) == 0 {
-			return s.deny(fmt.Sprintf("pipeline stage %d has empty argv", i), ""), nil
+			return s.deny(fmt.Sprintf("pipeline stage %d has empty argv", i)), nil
 		}
 		path := step.Argv[0]
 		argv := step.Argv[1:]
@@ -413,7 +386,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		if !ok {
 			input := joinForLog(path, argv)
 			s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
-			return s.deny("pipeline stage not allowed: "+input, ""), nil
+			return s.deny("pipeline stage not allowed: "+input), nil
 		}
 
 		requested := step.As
@@ -424,7 +397,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		if target == "" {
 			input := joinForLog(path, argv)
 			s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
-			return s.deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayTarget(requested, s.self)), ""), nil
+			return s.deny(fmt.Sprintf("pipeline stage %s not permitted to run as %s", input, displayTarget(requested, s.self))), nil
 		}
 
 		// For elevation in a pipeline, rewrite the stage to invoke
@@ -433,7 +406,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 		if target != s.self {
 			if !s.cfg.Sudo {
 				s.log.Denied(s.fullPipelineLog(a.Pipeline), s.self)
-				return s.deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)", ""), nil
+				return s.deny("pipeline stage requires elevation but sudo is disabled in config (set \"sudo\": true)"), nil
 			}
 			path, argv = s.buildElevatedArgv(target, path, argv)
 		}
@@ -452,7 +425,7 @@ func (s *Server) runPipeline(a runCommandArgs) (any, *rpcError) {
 	}
 
 	s.log.Allowed(s.fullPipelineLog(a.Pipeline), s.self)
-	res := s.execer.ExecutePipeline(stages)
+	res := exec.ExecutePipeline(stages)
 	return runResultToTool(res), nil
 }
 
@@ -464,7 +437,7 @@ func (s *Server) elevateAndExecute(target, path string, argv []string, rule *con
 	sudoPath, sudoArgv := s.buildElevatedArgv(target, path, argv)
 	// Pretend the elevation is just another command — same executor
 	// semantics, same timeout.
-	return s.execer.Execute(sudoPath, sudoArgv, rule, stdin)
+	return exec.Execute(sudoPath, sudoArgv, rule, stdin)
 }
 
 // buildElevatedArgv produces (path, argv) suitable for exec.Execute to
@@ -505,12 +478,8 @@ func runResultToTool(res *exec.Result) *toolsCallResult {
 	}
 }
 
-// deny constructs an error result for a denied call. msg is the
-// human-readable reason; detail is appended if non-empty.
-func (s *Server) deny(msg, detail string) *toolsCallResult {
-	if detail != "" {
-		msg += ": " + detail
-	}
+// deny returns a tools/call error result with the given reason.
+func (s *Server) deny(msg string) *toolsCallResult {
 	return &toolsCallResult{
 		Content: []contentBlock{{Type: "text", Text: "rrsh: " + msg}},
 		IsError: true,
@@ -533,20 +502,14 @@ func (s *Server) fullPipelineLog(stages []runStep) string {
 	return strings.Join(parts, " | ")
 }
 
-// logEscaper neutralizes characters that syslog/rsyslog could interpret
-// as record terminators. Without this, an argv element containing a
-// newline could be used to forge fake log entries that look like
-// legitimate ALLOWED/DENIED records — an authenticated attacker would
-// otherwise be able to plant decoy events to confuse incident review.
+// logEscaper neutralizes record-terminator chars in argv so an attacker
+// can't forge fake ALLOWED/DENIED lines in syslog.
 var logEscaper = strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "\\0")
 
-// sanitizeDescription strips C0 control characters (and DEL) from a
-// rule's description before it is returned via list_commands. The
-// description is operator-authored free text but lands in whatever UI
-// the AI client uses to display it; a stray ESC (0x1B) could become an
-// ANSI cursor-movement attack, and a BEL/BS combo could rewrite output.
-// Tab and newline are preserved so multi-line descriptions still
-// render naturally.
+// sanitizeDescription strips C0 controls + DEL from operator-authored
+// descriptions before list_commands returns them — keeps stray ESC or
+// BEL from becoming terminal-injection in the AI client's UI. Tab and
+// newline survive so multi-line descriptions still render.
 func sanitizeDescription(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
@@ -581,10 +544,8 @@ func errResponse(id json.RawMessage, code int, msg string) *response {
 	}
 }
 
-// safeUTF8 returns b as a string, replacing any invalid UTF-8 sequences
-// with U+FFFD. Without this, arbitrary command output containing invalid
-// bytes (binary data, stray escape sequences) would force json.Marshal to
-// emit bytes that subsequently fail to decode.
+// safeUTF8 replaces invalid UTF-8 with U+FFFD so arbitrary command
+// output (binary data, stray escapes) can be marshaled as JSON.
 func safeUTF8(b []byte) string {
 	if utf8.Valid(b) {
 		return string(b)
@@ -592,37 +553,28 @@ func safeUTF8(b []byte) string {
 	return strings.ToValidUTF8(string(b), "\uFFFD")
 }
 
-// resolveTarget mirrors the cmd package's resolution: requested user (with
-// "self" → s.self), checked against the rule's resolved `as:` list. Returns
-// "" on denial. Single-target rules implicitly elevate when the caller did
-// not ask for a different user.
+// resolveTarget returns the effective user a call should run as, or ""
+// to deny. "self" in requested or in the allowed list resolves to the
+// SSH user. A single-target rule implicitly elevates when the caller
+// didn't ask for a different user (the common "always root" case).
 func resolveTarget(requested string, allowed []string, self string) string {
 	if requested == config.SelfUser {
 		requested = self
 	}
-	resolved := resolveAllowedUsers(allowed, self)
-	for _, u := range resolved {
+	var single string
+	for _, u := range allowed {
+		if u == config.SelfUser {
+			u = self
+		}
 		if u == requested {
 			return requested
 		}
+		single = u
 	}
-	if requested == self && len(resolved) == 1 {
-		return resolved[0]
+	if requested == self && len(allowed) == 1 {
+		return single
 	}
 	return ""
-}
-
-// resolveAllowedUsers expands every "self" entry in `allowed` to `self`.
-func resolveAllowedUsers(allowed []string, self string) []string {
-	out := make([]string, 0, len(allowed))
-	for _, u := range allowed {
-		if u == config.SelfUser {
-			out = append(out, self)
-		} else {
-			out = append(out, u)
-		}
-	}
-	return out
 }
 
 func displayTarget(requested, self string) string {

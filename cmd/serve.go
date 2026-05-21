@@ -11,16 +11,9 @@ import (
 	"github.com/binwiederhier/rrsh/mcp"
 )
 
-// runServe is the default code path. rrsh exposes a JSON-RPC server over
-// stdin/stdout — no shell-string parsing, no `-c` mode. When invoked with
-// `-c "..."` or positional args, it errors out pointing the caller to MCP.
-//
-// Typical invocations:
-//
-//	rrsh                         # sshd login shell: read NDJSON from stdin
-//	rrsh --config /etc/rrsh.json # same, custom config
-//
-// Anything else is the legacy shell mode that has been removed.
+// runServe is the default code path: a JSON-RPC server over stdin/stdout.
+// `-c <cmd>`, positional args, or an interactive TTY all error out
+// pointing the caller to the JSON-RPC protocol.
 func runServe(args []string) {
 	fs := flag.NewFlagSet("rrsh", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -50,10 +43,8 @@ func runServe(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	// Resolve the current user up front: every downstream security
-	// decision (self vs target user, syslog tagging) needs it, and there
-	// is no useful fallback — if the kernel can't tell us who we are,
-	// fail closed rather than guess.
+	// Every downstream security decision needs the current user; fail
+	// closed rather than guess if the lookup fails.
 	u, err := user.Current()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
@@ -82,43 +73,33 @@ func runServe(args []string) {
 	}
 }
 
-// printShellModeRejection is the breadcrumb shown when something (a human
-// or an AI agent) tries to use rrsh as a traditional shell. It is the AI's
-// most likely first encounter with rrsh: a one-line instruction like
-// "you can diagnose the host via ssh rrsh@server" will most often result
-// in the AI trying `ssh rrsh@server whoami` or similar first. The text
-// here has to be enough for the AI to recover and discover JSON-RPC on
-// its own.
+// printShellModeRejection tells the caller (likely an AI trying
+// `ssh user@host whoami`) that rrsh is a JSON-RPC server and shows
+// enough to recover. Long-form on purpose: this is the breadcrumb that
+// turns a wrong first attempt into a working one.
 func printShellModeRejection(w *os.File) {
-	fmt.Fprint(w, `rrsh: this is a JSON-RPC server, not an interactive shell.
+	target := sshTargetHint()
+	fmt.Fprintf(w, `rrsh: this is a JSON-RPC server, not an interactive shell.
 
-To use it, send newline-delimited JSON-RPC 2.0 requests over SSH stdin:
+Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Tools are:
+  - list_commands — describes what this host permits
+  - run_command   — runs one command or a pipeline
 
-  echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
-    | ssh -T `+sshTargetHint()+`
+A typical first session looks like:
 
-Two tools are exposed:
-  - list_commands  — describes which commands this host permits
-  - run_command    — runs one command (argv slice) or a pipeline
-
-Typical first session:
-
-  printf '%s\n' \
+  printf '%%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ai","version":"0"}}}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_commands","arguments":{}}}' \
-    | ssh -T `+sshTargetHint()+`
+    | ssh -T %s
 
-The initialize response includes an "instructions" field with host-specific
+The initialize response carries an "instructions" field with host-specific
 guidance — read it first.
-`)
+`, target)
 }
 
-// sshTargetHint returns user@host derived from the environment, falling
-// back to generic placeholders. We deliberately tolerate user.Current
-// failures here — we're already printing an error and exiting; a missing
-// username just means the example uses "<user>" instead of being
-// copy-pasteable. The fatal-on-error policy applies to the live JSON-RPC
-// path, not the help text.
+// sshTargetHint returns user@host for help text. Failures fall back to
+// generic placeholders — we're already exiting with an error and the
+// example only needs to be copy-pasteable.
 func sshTargetHint() string {
 	username := "<user>"
 	if u, err := user.Current(); err == nil && u.Username != "" {

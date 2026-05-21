@@ -1,6 +1,6 @@
 {
   "name": "ntfy",
-  "instructions": "You are connected to the 'ntfy' host via rrsh, a read-only diagnostic gateway. Call list_commands first — each rule's `command` field is a list of regexes (element 0 matches the binary path, elements 1..N-1 match argv 1-for-1). Your argv length must equal len(command)-1 AND each element must match its corresponding pattern. Multiple rules can share a command[0] regex to describe alternative argv shapes (e.g. `ps aux` and `ps -ef` are two separate rules). Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) — you do NOT need to pass {\"as\":\"root\"} for those.\n\nLOG LAYOUT on this host:\n  /var/log/ntfy.log                    — main ntfy server log (current)\n  /var/log/ntfy.log.N.gz               — daily rotations, all gzipped (logrotate has no delaycompress for ntfy)\n  /var/log/ntfy-goroutine.log          — periodic goroutine dumps written by emergency-restart cron (every 2 min)\n  /var/log/ntfy-health-check.log       — synthetic health-check probe output (cron, every 2 min)\n  /var/log/ntfy-database-backup.log    — hourly backup script output\n  /var/log/nginx/access.log            — 2xx/3xx HTTP responses\n  /var/log/nginx/access.log.1          — yesterday's, uncompressed; .2.gz onwards are gzipped\n  /var/log/nginx/access_error.log      — 4xx/5xx HTTP responses (scan/attack noise lands here)\n  /var/log/nginx/access_error.log.N    — same rotation pattern (.1 uncompressed, .N.gz compressed)\n  /var/log/nginx/error.log             — nginx's own error log + rotations\n  /var/log/auth.log                    — SSH attempts, sudo activity, login session events\n  /var/log/syslog                      — general system log\n\nFor uncompressed .log and .log.1 files, use cat/tail/head/grep/wc. For gzipped rotations (*.gz), use zcat or zgrep — ztail and zhead do NOT exist, so use a pipeline like `zcat /var/log/ntfy.log.5.gz | tail -n 200`.\n\nFor systemd unit logs (live, in-memory journal), use journalctl with -u {ntfy,nginx,ssh,sshd}. systemctl status / is-active inspects unit state.\n\nfail2ban-client status shows active jails and currently-banned IPs. lastb shows failed SSH attempts, last shows successful logins.\n\nFor Prometheus metrics, run `ip addr` first to find the host's 10.x address, then `curl -sS http://10.X.Y.Z:9090/metrics` (it does NOT bind to localhost).\n\nNo write access. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
+  "instructions": "You are connected to the 'ntfy' host via rrsh, a read-only diagnostic gateway. Call list_commands first — each rule's `command` field is a list of regexes (element 0 matches the binary path, elements 1..N-1 match argv 1-for-1). Your argv length must equal len(command)-1 AND each element must match its corresponding pattern. Multiple rules can share a command[0] regex to describe alternative argv shapes (e.g. `ps aux` and `ps -ef` are two separate rules). Rules whose 'as' field contains 'root' auto-elevate (implicit sudo) — you do NOT need to pass {\"as\":\"root\"} for those.\n\nLOG LAYOUT on this host:\n  /var/log/ntfy.log                    — main ntfy server log (current)\n  /var/log/ntfy.log.N.gz               — daily rotations, all gzipped (logrotate has no delaycompress for ntfy)\n  /var/log/ntfy-goroutine.log          — periodic goroutine dumps written by emergency-restart cron (every 2 min)\n  /var/log/ntfy-health-check.log       — synthetic health-check probe output (cron, every 2 min)\n  /var/log/ntfy-database-backup.log    — hourly backup script output\n  /var/log/nginx/access.log            — 2xx/3xx HTTP responses\n  /var/log/nginx/access.log.1          — yesterday's, uncompressed; .2.gz onwards are gzipped\n  /var/log/nginx/access_error.log      — 4xx/5xx HTTP responses (scan/attack noise lands here)\n  /var/log/nginx/access_error.log.N    — same rotation pattern (.1 uncompressed, .N.gz compressed)\n  /var/log/nginx/error.log             — nginx's own error log + rotations\n  /var/log/auth.log                    — SSH attempts, sudo activity, login session events\n  /var/log/syslog                      — general system log\n\nFor uncompressed .log and .log.1 files, use cat/tail/head/grep/wc. For gzipped rotations (*.gz), use zcat or zgrep — ztail and zhead do NOT exist, so use a pipeline like `zcat /var/log/ntfy.log.5.gz | tail -n 200`.\n\nFor systemd unit logs (live, in-memory journal), use journalctl with -u {ntfy,nginx,ssh,sshd}. systemctl status / is-active inspects unit state.\n\nfail2ban-client status shows active jails and currently-banned IPs. lastb shows failed SSH attempts, last shows successful logins.\n\nFor Prometheus metrics, run `ip addr` first to find the host's 10.x address, then `curl -sS http://10.X.Y.Z:9090/metrics` or `:9100/metrics`. 9090 typically exposes the app's own /metrics (e.g. ntfy_*); 9100 is node_exporter for host-level CPU/IO/disk/network. Neither binds to localhost.\n\nFor disk-usage diagnosis, `du -sh <path>` is allowed under /var/log and /var/lib (or any non-dotfile subpath). Cron job definitions live under /etc/cron.d/ and /etc/crontab — list with `ls`, read with `cat`. Custom diagnostic/maintenance scripts (e.g. the synthetic health-check probe) live under /usr/local/bin/ — also readable with `cat`/`head`. journalctl also accepts `--grep <regex>` for filtering noisy unit logs.\n\nNo write access. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
   "sudo": true,
   "commands": [
     {
@@ -68,6 +68,11 @@
       "description": "Summarize disk usage under /var/log (or a subpath that does not start with `.`). Blocks `..` traversal."
     },
     {
+      "command": ["/usr/bin/du", "-sh", "/var/lib(/[^./][^/]*)*"],
+      "timeout": "60s",
+      "description": "Summarize disk usage under /var/lib (or a subpath that does not start with `.`). Useful for finding which app's data dir is filling the disk (e.g. /var/lib/ntfy, /var/lib/postgresql). Recursive on large trees; allow up to 60s."
+    },
+    {
       "command": ["/usr/bin/lsblk"],
       "description": "List block devices."
     },
@@ -93,9 +98,9 @@
       "description": "DNS lookup of a specific record type. No @server."
     },
     {
-      "command": ["/usr/bin/curl", "-sS", "http://10(\\.\\d{1,3}){3}:9090/metrics"],
+      "command": ["/usr/bin/curl", "-sS", "http://10(\\.\\d{1,3}){3}:(9090|9100)/metrics"],
       "timeout": "15s",
-      "description": "Fetch the Prometheus node_exporter metrics endpoint. The metrics endpoint is bound to the host's private 10.x interface (NOT localhost) — use `ip addr` first to discover the right address."
+      "description": "Fetch a Prometheus metrics endpoint on the host's private 10.x interface (NOT localhost). 9090 typically exposes the app's own /metrics (e.g. ntfy_*); 9100 is node_exporter (host CPU/IO/disk/network). Use `ip addr` first to discover the right address."
     },
     {
       "command": ["/usr/bin/last"],
@@ -148,6 +153,21 @@
       "description": "Show entries since <expr> (any time-spec journalctl accepts, e.g. '1 hour ago')."
     },
     {
+      "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "--grep", ".+"],
+      "as": ["root"],
+      "description": "Filter a unit's journal by case-sensitive regex (PCRE)."
+    },
+    {
+      "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "-n", "\\d+", "--grep", ".+"],
+      "as": ["root"],
+      "description": "Filter the last N journal entries by regex. Useful for finding specific error patterns in a noisy unit log."
+    },
+    {
+      "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "--since", ".+", "--grep", ".+"],
+      "as": ["root"],
+      "description": "Filter journal entries by regex within a time window."
+    },
+    {
       "command": ["/usr/bin/tail", "-n", "\\d+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
       "description": "Tail the last N lines of an uncompressed log file under /var/log. Covers ntfy*.log, nginx/*.log, syslog, auth.log, plus their .1 rotations. For .gz use zcat | tail."
@@ -158,9 +178,29 @@
       "description": "Read the first N lines of an uncompressed log file."
     },
     {
+      "command": ["/usr/bin/head", "-n", "\\d+", "/usr/local/bin/[\\w-][\\w.-]*"],
+      "as": ["root"],
+      "description": "Read the first N lines of a script or file under /usr/local/bin (filename starts with a word char or dash, no `..`)."
+    },
+    {
       "command": ["/usr/bin/cat", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
       "description": "Dump an uncompressed log file. For .gz use zcat."
+    },
+    {
+      "command": ["/usr/bin/cat", "/etc/crontab"],
+      "as": ["root"],
+      "description": "Read the system crontab."
+    },
+    {
+      "command": ["/usr/bin/cat", "/etc/cron\\.(d|hourly|daily|weekly|monthly)/[\\w-][\\w.-]*"],
+      "as": ["root"],
+      "description": "Read a cron job file under /etc/cron.{d,hourly,daily,weekly,monthly}. Useful for understanding what scheduled scripts run (e.g. ntfy-health-check, emergency-restart)."
+    },
+    {
+      "command": ["/usr/bin/cat", "/usr/local/bin/[\\w-][\\w.-]*"],
+      "as": ["root"],
+      "description": "Dump a script or text file under /usr/local/bin. Useful for inspecting custom diagnostic/maintenance scripts referenced by cron."
     },
     {
       "command": ["/usr/bin/zcat", "/var/log/(ntfy[^/]*\\.log|nginx/[^/]+\\.log|syslog|auth\\.log)\\.\\d+\\.gz"],
@@ -170,6 +210,14 @@
     {
       "command": ["/usr/bin/ls", "-la?h?", "/var/log(/[^./][^/]*)*"],
       "description": "List /var/log or a subpath. `-l[a][h]` for the flag, blocks `..` in the path."
+    },
+    {
+      "command": ["/usr/bin/ls", "-la?h?", "/etc/cron\\.(d|hourly|daily|weekly|monthly)(/[^./][^/]*)*"],
+      "description": "List entries in /etc/cron.{d,hourly,daily,weekly,monthly}. Useful for discovering scheduled jobs before reading them with `cat`."
+    },
+    {
+      "command": ["/usr/bin/ls", "-la?h?", "/usr/local/bin(/[^./][^/]*)*"],
+      "description": "List entries under /usr/local/bin. Useful for discovering custom diagnostic/maintenance scripts."
     },
     {
       "command": ["/usr/bin/wc", "-l", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],

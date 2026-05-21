@@ -12,7 +12,7 @@ import (
 func TestExecute_Success(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := New().Execute("/bin/echo", []string{"hello"}, rule, nil)
+	res := Execute("/bin/echo", []string{"hello"}, rule, nil)
 	if res.ExitCode != 0 {
 		t.Errorf("exit code = %d, want 0", res.ExitCode)
 	}
@@ -24,7 +24,7 @@ func TestExecute_Success(t *testing.T) {
 func TestExecute_ExitCode(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := New().Execute("/bin/false", nil, rule, nil)
+	res := Execute("/bin/false", nil, rule, nil)
 	if res.ExitCode == 0 {
 		t.Error("expected non-zero exit code from /bin/false")
 	}
@@ -38,7 +38,7 @@ func TestExecute_PerRuleTimeout(t *testing.T) {
 		Timeout: 100 * time.Millisecond,
 	}
 	start := time.Now()
-	res := New().Execute("/bin/sleep", []string{"10"}, rule, nil)
+	res := Execute("/bin/sleep", []string{"10"}, rule, nil)
 	elapsed := time.Since(start)
 
 	if res.ExitCode != timeoutExitCode {
@@ -59,7 +59,7 @@ func TestExecute_PerRuleTimeout(t *testing.T) {
 func TestExecute_ArgWithEmbeddedSpace(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := New().Execute("/bin/echo", []string{"a b", "c"}, rule, nil)
+	res := Execute("/bin/echo", []string{"a b", "c"}, rule, nil)
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
 	}
@@ -73,7 +73,7 @@ func TestExecute_ArgWithEmbeddedSpace(t *testing.T) {
 func TestExecute_Stdin(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := New().Execute("/bin/cat", nil, rule, strings.NewReader("hello stdin"))
+	res := Execute("/bin/cat", nil, rule, strings.NewReader("hello stdin"))
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
 	}
@@ -87,7 +87,7 @@ func TestExecute_StderrCaptured(t *testing.T) {
 	// /bin/sh -c "echo err >&2" would require a shell; instead use a
 	// command that's guaranteed to write to stderr: ls of a missing file.
 	rule := &config.CommandRule{}
-	res := New().Execute("/bin/ls", []string{"/nonexistent-path-rrsh-test"}, rule, nil)
+	res := Execute("/bin/ls", []string{"/nonexistent-path-rrsh-test"}, rule, nil)
 	if res.ExitCode == 0 {
 		t.Error("ls of missing path should fail")
 	}
@@ -100,7 +100,7 @@ func TestExecutePipeline_Success(t *testing.T) {
 	t.Parallel()
 	echoRule := &config.CommandRule{}
 	catRule := &config.CommandRule{}
-	res := New().ExecutePipeline([]Stage{
+	res := ExecutePipeline([]Stage{
 		{Path: "/bin/echo", Argv: []string{"hello pipeline"}, Rule: echoRule},
 		{Path: "/bin/cat", Rule: catRule},
 	})
@@ -117,7 +117,7 @@ func TestExecutePipeline_LastStageExitWins(t *testing.T) {
 	// Even though the first stage succeeds, the last stage exits non-zero.
 	echoRule := &config.CommandRule{}
 	falseRule := &config.CommandRule{}
-	res := New().ExecutePipeline([]Stage{
+	res := ExecutePipeline([]Stage{
 		{Path: "/bin/echo", Argv: []string{"x"}, Rule: echoRule},
 		{Path: "/bin/false", Rule: falseRule},
 	})
@@ -129,7 +129,7 @@ func TestExecutePipeline_LastStageExitWins(t *testing.T) {
 func TestExecutePipeline_Stdin(t *testing.T) {
 	t.Parallel()
 	catRule := &config.CommandRule{}
-	res := New().ExecutePipeline([]Stage{
+	res := ExecutePipeline([]Stage{
 		{Path: "/bin/cat", Rule: catRule, Stdin: strings.NewReader("piped in\n")},
 		{Path: "/bin/cat", Rule: catRule},
 	})
@@ -144,7 +144,7 @@ func TestExecutePipeline_Stdin(t *testing.T) {
 func TestExecutePipeline_SingleStageEquivalentToExecute(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := New().ExecutePipeline([]Stage{
+	res := ExecutePipeline([]Stage{
 		{Path: "/bin/echo", Argv: []string{"solo"}, Rule: rule},
 	})
 	if res.ExitCode != 0 {
@@ -160,7 +160,7 @@ func TestExecutePipeline_SingleStageEquivalentToExecute(t *testing.T) {
 func TestExecute_LargeOutputFits(t *testing.T) {
 	t.Parallel()
 	rule := &config.CommandRule{}
-	res := New().Execute("/usr/bin/head", []string{"-c", "1048576", "/dev/zero"}, rule, nil)
+	res := Execute("/usr/bin/head", []string{"-c", "1048576", "/dev/zero"}, rule, nil)
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
 	}
