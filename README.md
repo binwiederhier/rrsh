@@ -51,7 +51,7 @@ That's the entire setup - the `rrsh` user can now log in via SSH and reach the J
 sudo sed -i 's/^# rrsh /rrsh /' /etc/sudoers.d/rrsh
 ```
 
-Both knobs must be on for elevation to work: `"sudo": true` in `rrsh.json` AND the uncommented sudoers grant. See [Elevation](#elevation) for the full picture.
+Without the uncommented sudoers grant, the spawned sudo fails and the error surfaces in `result.stderr`. See [Elevation](#elevation) for the full picture.
 
 ## Configuration
 
@@ -60,7 +60,6 @@ Both knobs must be on for elevation to work: `"sudo": true` in `rrsh.json` AND t
 ```json
 {
   "instructions": "You are on the ntfy production server. The `hello.commands` array above lists what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
-  "sudo": true,
   "commands": [
     { "command": ["/usr/bin/whoami"],
       "description": "Show the effective username." },
@@ -85,7 +84,6 @@ Top-level fields:
 | Field          | Default     | Meaning                                                                                                       |
 | -------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
 | `instructions` | empty       | Returned in `hello.instructions` - the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
-| `sudo`         | `false`     | Master switch for elevation. When `false`, every `run` whose effective user differs from the SSH user is denied, and the privileged `rrsh sudo` subcommand refuses to run - even if `/etc/sudoers.d/rrsh` is in place. Must be `true` to use any rule whose `as:` list includes a non-self user. |
 | `commands`     | required    | Array of allowlist rules.                                                                                     |
 
 There is no top-level `timeout`. Every command runs with a fixed 30-second deadline unless its rule sets its own `timeout`. Letting operators raise the global timeout would silently let runaway commands hold the JSON-RPC channel hostage; per-rule overrides preserve that guardrail while letting genuinely long-running diagnostics (e.g. `ping -c 100 host`) opt out.
@@ -194,19 +192,19 @@ When a rule's `as` list contains a user other than `self`, Claude must request t
 
 The AI sees each rule's `as` list in `hello.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `self` is a denial.
 
-Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo, and it is gated by two independent knobs:
+Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo. The gate is **the sudoers grant** at `/etc/sudoers.d/rrsh`:
 
-1. **The sudoers grant**, installed by the package at `/etc/sudoers.d/rrsh`:
-   ```
-   rrsh ALL=(root) NOPASSWD: /usr/bin/rrsh sudo *
-   ```
-   To allow other users (e.g. `deploy`), edit the `(...)` part to list every user that appears in any rule's `as:` list. The file is a conffile, so upgrades won't clobber your changes.
+```
+rrsh ALL=(root) NOPASSWD: /usr/bin/rrsh sudo *
+```
 
-2. **The config-level `sudo` flag**, default `false`. Until you set `"sudo": true` at the top of `/etc/rrsh/rrsh.json`, the package's sudoers grant has no effect: the JSON-RPC server denies elevated calls with a clear error, and the privileged `rrsh sudo` half exits before running anything.
+The package ships this line commented out so installing the package opens no elevation path. Uncomment it (see [Optional: Run commands as root](#optional-run-commands-as-root) in Install) to enable. To allow other target users (e.g. `deploy`), change `(root)` to `(root,deploy)` and list every user that appears in any rule's `as:` list. The file is a conffile, so upgrades won't clobber your changes.
+
+If the grant is missing or commented out, the spawned sudo fails (typically with "sudo: a password is required" or "user … is not allowed to execute …") and that text surfaces in `result.stderr` with a non-zero `result.exit`.
 
 The privileged half (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the command against the rule's `as` list before executing - it never trusts its caller, does no flag parsing, and takes the originating user from `$SUDO_USER`.
 
-**Trust boundary:** a parser/match bug in rrsh is a root compromise. Keep `as:` lists minimal, keep `args` regexes tight, leave `"sudo": false` until you actually need elevation, and prefer one narrow rule per elevated command over a single permissive rule.
+**Trust boundary:** a parser/match bug in rrsh is a root compromise. Keep `as:` lists minimal, keep regexes tight, leave the sudoers grant commented out until you actually need elevation, and prefer one narrow rule per elevated command over a single permissive rule.
 
 ## Logging
 

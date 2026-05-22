@@ -43,13 +43,6 @@ func runSudo(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	// Even though sudoers grants invocation, the operator must opt in
-	// via "sudo": true in the config. Closes accidental elevation.
-	if !cfg.Sudo {
-		fmt.Fprintln(os.Stderr, "rrsh: elevation disabled (set \"sudo\": true in "+configPath+")")
-		os.Exit(exitDenied)
-	}
-
 	path := args[0]
 	argv := args[1:]
 	input := util.JoinForLog(path, argv)

@@ -17,7 +17,6 @@ var validUsername = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 type rawConfig struct {
 	Instructions string    `json:"instructions"`
-	Sudo         bool      `json:"sudo"`
 	Commands     []rawRule `json:"commands"`
 }
 

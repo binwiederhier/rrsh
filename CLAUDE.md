@@ -39,10 +39,7 @@ goreleaser release --snapshot --clean --skip=publish  # produce .deb/.rpm in dis
 
 A parser/match bug in rrsh is a root compromise. The privileged half (`cmd/sudo.go`) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the rule's `as:` list before executing anything; it never trusts its caller.
 
-Two independent knobs gate elevation:
-
-1. The sudoers grant at `/etc/sudoers.d/rrsh` (shipped by the package, conffile).
-2. The top-level `"sudo": true` flag in `rrsh.json` (default `false`). Without it, the JSON-RPC server denies elevated calls and the privileged half exits before running anything.
+Elevation is gated by a single operator-controlled knob: the sudoers grant at `/etc/sudoers.d/rrsh` (shipped commented out, so installing the package opens no elevation path until the operator uncomments it). If the grant is missing or commented, the spawned sudo fails and the error surfaces in `result.stderr`.
 
 The privileged half (`cmd/sudo.go`) deliberately does NOT import `server/`. That keeps the JSON-RPC code out of the root-compromise blast radius. `matcher/` is shared between the two halves because it is small, pure, and has no I/O.
 

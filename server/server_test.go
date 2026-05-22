@@ -384,15 +384,17 @@ func TestServer_Run_OversizedRequestRejected(t *testing.T) {
 	}
 }
 
-func TestServer_Run_ElevationDeniedWhenSudoDisabled(t *testing.T) {
+// TestServer_Run_ElevationReachesExecutor verifies that requesting an
+// allowed elevation passes the matcher/authorize gates and reaches the
+// executor. The executor will fail (we can't really invoke sudo in
+// tests; mustNewServer pins srv.rrsh to /nonexistent so sudo errors
+// out fast), but we should see a normal `result` envelope with a
+// non-zero exit - NOT an errDenied RPC error.
+func TestServer_Run_ElevationReachesExecutor(t *testing.T) {
 	t.Parallel()
 	echoRoot := testRule("/bin/echo", ".*")
 	echoRoot.As = []string{"root"}
-	echoRoot.Description = "Echo as root."
-	cfg := &config.Config{
-		Sudo:     false, // explicit, though it's the default
-		Commands: []config.CommandRule{echoRoot},
-	}
+	cfg := &config.Config{Commands: []config.CommandRule{echoRoot}}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"argv":["/bin/echo","x"],"as":"root"}}` + "\n"
 	srv := mustNewServer(t, cfg, "tester", in, out)
@@ -400,41 +402,8 @@ func TestServer_Run_ElevationDeniedWhenSudoDisabled(t *testing.T) {
 		t.Fatalf("Serve: %v", err)
 	}
 	resps := decodeResponses(t, out.String())
-	errObj, ok := resps[0]["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected error envelope when sudo:false and elevation requested, got: %v", resps[0])
-	}
-	if int(errObj["code"].(float64)) != errDenied {
-		t.Errorf("code = %v, want %d", errObj["code"], errDenied)
-	}
-	if !strings.Contains(errObj["message"].(string), "sudo") {
-		t.Errorf("error should mention sudo flag, got: %q", errObj["message"])
-	}
-}
-
-func TestServer_Run_ElevationAllowedWhenSudoEnabled(t *testing.T) {
-	t.Parallel()
-	// We can't actually invoke /usr/bin/sudo in the test environment, but
-	// we can verify the gate passes - the call should reach the executor
-	// (which then fails to exec sudo, surfacing as a non-zero exit). The
-	// point is: no "elevation disabled" RPC error.
-	echoRoot := testRule("/bin/echo", ".*")
-	echoRoot.As = []string{"root"}
-	cfg := &config.Config{
-		Sudo:     true,
-		Commands: []config.CommandRule{echoRoot},
-	}
-	out := &bytes.Buffer{}
-	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"argv":["/bin/echo","x"],"as":"root"}}` + "\n"
-	srv := mustNewServer(t, cfg, "tester", in, out)
-	if err := srv.Serve(); err != nil {
-		t.Fatalf("Serve: %v", err)
-	}
-	resps := decodeResponses(t, out.String())
-	if errObj, isErr := resps[0]["error"].(map[string]any); isErr {
-		if strings.Contains(errObj["message"].(string), "elevation disabled") {
-			t.Errorf("should not say elevation disabled when sudo:true, got: %q", errObj["message"])
-		}
+	if _, isErr := resps[0]["error"]; isErr {
+		t.Fatalf("expected result envelope (executor reached), got error: %v", resps[0])
 	}
 }
 

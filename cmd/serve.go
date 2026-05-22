@@ -105,9 +105,10 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    Result: {"stdout":"...","stderr":"...","exit":0}
 
 3) Run as root. Requires the matched rule's "as" list to include "root"
-   AND the host config to have "sudo":true. The AI MUST pass "as":"root"
-   explicitly - rrsh does not auto-elevate. Omitting "as" runs the
-   command as the SSH user, which fails if the rule doesn't allow "self":
+   AND the operator's /etc/sudoers.d/rrsh grant to be enabled (shipped
+   commented out by default). The AI MUST pass "as":"root" explicitly
+   - rrsh does not auto-elevate. Omitting "as" runs the command as the
+   SSH user, which fails if the rule doesn't allow "self":
 
   echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
          "argv":["/usr/bin/journalctl","-u","ntfy","-n","100"],

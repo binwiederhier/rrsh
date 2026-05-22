@@ -174,25 +174,13 @@ func TestParse_Description(t *testing.T) {
 	}
 }
 
-func TestParse_SudoDefault(t *testing.T) {
+// `"sudo"` is no longer a config field. Verify the parser rejects it
+// as an unknown field so old configs surface a clear error.
+func TestParse_RejectsSudoField(t *testing.T) {
 	t.Parallel()
-	cfg, err := Parse([]byte(`{"commands": [{"command": ["/usr/bin/whoami"]}]}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Sudo {
-		t.Error("Sudo should default to false")
-	}
-}
-
-func TestParse_SudoTrue(t *testing.T) {
-	t.Parallel()
-	cfg, err := Parse([]byte(`{"sudo": true, "commands": [{"command": ["/usr/bin/whoami"]}]}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !cfg.Sudo {
-		t.Error("Sudo should be true when explicitly set")
+	_, err := Parse([]byte(`{"sudo": true, "commands": [{"command": ["/usr/bin/whoami"]}]}`))
+	if err == nil || !strings.Contains(err.Error(), "sudo") {
+		t.Fatalf("expected unknown-field error mentioning 'sudo', got: %v", err)
 	}
 }
 

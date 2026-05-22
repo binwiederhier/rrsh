@@ -264,12 +264,11 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), requestedUser))
 		}
 
-		// Maybe re-write command as: /usr/bin/sudo rrsh sudo <path> <argv>
+		// Maybe re-write command as: /usr/bin/sudo rrsh sudo <path> <argv>.
+		// If /etc/sudoers.d/rrsh isn't uncommented, the spawned sudo will
+		// fail with a clear "not allowed to execute" stderr that surfaces
+		// in result.stderr - no separate gate at this layer.
 		if requestedUser != s.user {
-			if !s.cfg.Sudo {
-				s.log.Denied(commandForLog, requestedUser)
-				return nil, deny("elevation disabled in config (set \"sudo\": true in /etc/rrsh/rrsh.json)")
-			}
 			path, argv = s.buildSudoCommand(requestedUser, path, argv)
 		}
 
