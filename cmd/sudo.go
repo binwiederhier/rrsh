@@ -65,7 +65,7 @@ func runSudo(args []string) {
 	}
 
 	// Authorize: us (currentUser) must be in the rule's `as:` list, with
-	// "self" resolving to the originating SSH user (sudoUser).
+	// "self" resolving to the originating SSH user (originUser).
 	if err := auth.Check(currentUser, auth.Resolve(rule.As, originUser)); err != nil {
 		log.DeniedFrom(input, currentUser, originUser)
 		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, currentUser)

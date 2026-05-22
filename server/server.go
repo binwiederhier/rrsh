@@ -28,7 +28,7 @@ type Server struct {
 	cfg         *config.Config
 	matcher     *matcher.Matcher
 	log         *logger.SyslogLogger
-	currentUser string // current currentUser
+	currentUser string // SSH user this server is running as
 	rrsh        string // path to this binary for elevation re-exec
 	in          *bufio.Reader
 	out         io.Writer
@@ -283,8 +283,9 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			Stdin: stdin,
 		})
 	}
-	// e.g. "root,deploy" for a mixed pipeline, or just s.user when no
-	// stage elevated (formatEvent then collapses to a single user= field).
+	// e.g. "root,deploy" for a mixed pipeline, or just s.currentUser
+	// when no stage elevated (formatEvent then collapses to a single
+	// user= field).
 	auditUser := s.currentUser
 	if elevated := dedup(requestedUsers, s.currentUser); len(elevated) > 0 {
 		auditUser = strings.Join(elevated, ",")
@@ -298,7 +299,7 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 //
 //	/usr/bin/sudo --non-interactive [--user=USER] -- /usr/bin/rrsh sudo <path> <argv...>
 //
-// -u is omitted when currentUser == "root" (sudo defaults to root). The `--`
+// -u is omitted when user == "root" (sudo defaults to root). The `--`
 // separator is defense in depth: s.rrsh comes from os.Executable() and
 // path is matcher-enforced absolute, so neither can be confused with a
 // sudo flag today, but `--` makes that resistance explicit and survives
