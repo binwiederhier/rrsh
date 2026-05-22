@@ -1,21 +1,21 @@
 # rrsh - really restricted shell
 
-A JSON-RPC server that lets an AI agent (Claude, mostly) run a curated set of commands on a remote host. Installs as a user's login shell so sshd handles auth and transport - no daemon to keep running, no port to firewall, no auth code in rrsh itself.
+A JSON-RPC server that lets an AI agent (Claude, Cursor) run a curated set of commands on a remote host. Installs as a user's login shell so sshd handles auth and transport - no daemon to keep running, no port to firewall, no auth code in rrsh itself. The project has zero runtime dependencies (Go stdlib only).
 
-Useful for letting Claude SSH into a server and do bounded diagnostic work (`systemctl status`, `journalctl -u …`, `tail /var/log/…`, etc.) without giving it a real shell. Individual commands can additionally be marked runnable as `root` (or any other user) via a single sudoers line - see [Elevation](#elevation).
+Useful for letting your AI log into a server and do bounded diagnostic work (`systemctl status`, `journalctl -u …`, `tail /var/log/…`, etc.) without giving it a real shell.
 
-Zero runtime dependencies (Go stdlib only). Single static binary.
+Here's a super simple example:
 
-## How it works
+```bash
+# Lists all allowed commands
+echo '{"jsonrpc":"2.0","id":1,"method":"hello"}' | ssh -T -i ~/.ssh/id_ai rrsh@host 
 
-- Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
-- rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
-- Three methods are exposed: `hello` (host-specific instructions and the full allowlist), `run_command` (one allowlisted command), and `run_pipeline` (chained stages with native Go pipes).
-- Arguments are passed as a real `argv` array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
-- Commands are matched against `/etc/rrsh/rrsh.json` rules (fixed path - both the server and the privileged `rrsh sudo` subcommand read the same file, so they cannot disagree about the allowlist). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
-- Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
+# Do some diagnostics (depends on allowed commands)
+echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/systemctl", "status", "ntfy"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host
+echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/last", "-n", "5"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host  
+```
 
-## Install
+## Installation
 
 1. **Install the package.** Download a `.deb` or `.rpm` from the releases page:
 
@@ -31,8 +31,13 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
    sudo cp /etc/rrsh/rrsh.json.example /etc/rrsh/rrsh.json
    sudo $EDITOR /etc/rrsh/rrsh.json
    ```
+   
+I highly recommend letting your favorite AI tailor the `rrsh.json` config for you. A good prompt would be:
 
-3. **Install the authorized key.** The `rrsh` user's home (`/var/lib/rrsh`) is root-owned (so the `rrsh` user can't edit its own `authorized_keys`); the postinst creates `/var/lib/rrsh/.ssh/` for you. Add the AI agent's public key from the operator side:
+> I'd like to create a `rrsh.json` config file (see github.com/binwiederhi/rrsh) for <host> that allows
+> diagnosing general system health, as well as log file analysis for nginx, grafana, etc.  
+
+3. **Install the AI's authorized key.** The `rrsh` user is created by default. You don't have to use it, but it's the easiest. Simply add your AI's SSH public key to `/var/lib/rrsh/.ssh/authorized_keys`.
 
    ```bash
    echo 'ssh-ed25519 AAAA... ai-agent-key' | sudo tee -a /var/lib/rrsh/.ssh/authorized_keys
@@ -40,13 +45,10 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 
 That's the entire setup - the `rrsh` user can now log in via SSH and reach the JSON-RPC server.
 
-### Optional: Run commands as root
-
-If any of your rules use `"as": ["root", ...]`, you also need to uncomment the grant line in `/etc/sudoers.d/rrsh` (shipped commented-out so installing the package opens no elevation path by default):
+4. **Optional: Run commands as root**:  If any of your rules use `"as": ["root", ...]`, you also need to uncomment the grant line in `/etc/sudoers.d/rrsh` (shipped commented-out):
 
 ```bash
-sudo sed -i 's/^#rrsh /rrsh /' /etc/sudoers.d/rrsh
-sudo visudo -cf /etc/sudoers.d/rrsh   # sanity check
+sudo sed -i 's/^# rrsh /rrsh /' /etc/sudoers.d/rrsh
 ```
 
 Both knobs must be on for elevation to work: `"sudo": true` in `rrsh.json` AND the uncommented sudoers grant. See [Elevation](#elevation) for the full picture.
@@ -105,6 +107,15 @@ Rules:
 - Each entry of `command` is wrapped in `^(?:…)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
 - **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected - typos in the config fail fast rather than silently weakening the policy.
+
+## How it works
+
+- Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
+- rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
+- Three methods are exposed: `hello` (host-specific instructions and the full allowlist), `run_command` (one allowlisted command), and `run_pipeline` (chained stages with native Go pipes).
+- Arguments are passed as a real `argv` array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
+- Commands are matched against `/etc/rrsh/rrsh.json` rules (fixed path - both the server and the privileged `rrsh sudo` subcommand read the same file, so they cannot disagree about the allowlist). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
+- Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
 
 ## Wire format
 
@@ -220,5 +231,5 @@ go build -o rrsh .
 Requires Go 1.25+. No external dependencies - `go.mod` lists only the module itself.
 
 ## License
-
-Apache 2.0
+Made with ❤️ by [Philipp C. Heckel](https://heckel.io).
+Licensed under the [Apache License 2.0](LICENSE).
