@@ -1,33 +1,41 @@
-// Package auth holds the rule-level authorization check that is shared
-// by the JSON-RPC server (server/) and the privileged half (cmd/sudo.go).
-// Pulling it out of server/ lets cmd/sudo.go authorize without importing
-// the JSON-RPC code path - the privileged binary's blast radius stays
-// matcher+config+auth+exec only.
 package auth
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
-// SelfUser is the magic token in a rule's `as:` list meaning "the SSH
-// user who invoked rrsh". Resolved at runtime against $SUDO_USER (for
-// the privileged subcommand) or the current user (unprivileged).
+// SelfUser is the magic token in a rule's "as:" list meaning "the SSH
+// user who invoked rrsh"
 const SelfUser = "self"
 
 // ErrNotPermitted is returned by Check when the requested target user
 // is not in the rule's allowed list.
 var ErrNotPermitted = errors.New("requested user not permitted by rule's as: list")
 
-// Check returns nil if requestedUser is in allowedUsers, with SelfUser
-// entries resolved against selfUser before comparison. Both
-// requestedUser and selfUser must already be normalized (no "" or
-// SelfUser sentinel values).
-func Check(requestedUser, selfUser string, allowedUsers []string) error {
+// Check returns nil if requestedUser is in allowedUsers, or
+// ErrNotPermitted otherwise. The list must already have been processed
+// through Resolve so it contains no SelfUser sentinel values.
+func Check(requestedUser string, allowedUsers []string) error {
+	if slices.Contains(allowedUsers, requestedUser) {
+		return nil
+	}
+	return ErrNotPermitted
+}
+
+// Resolve substitutes any SelfUser entries in allowedUsers with the
+// concrete selfUser (the originating SSH identity) and deduplicates
+func Resolve(allowedUsers []string, selfUser string) []string {
+	seen := make(map[string]struct{}, len(allowedUsers))
 	for _, u := range allowedUsers {
 		if u == SelfUser {
 			u = selfUser
 		}
-		if u == requestedUser {
-			return nil
-		}
+		seen[u] = struct{}{}
 	}
-	return ErrNotPermitted
+	out := make([]string, 0, len(seen))
+	for u := range seen {
+		out = append(out, u)
+	}
+	return out
 }

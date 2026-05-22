@@ -37,33 +37,33 @@ func New(username string) *SyslogLogger {
 // another user for elevated ones). For pipelines with mixed elevation, the
 // caller can pass a comma-joined list (e.g. "self,root") so the audit line
 // still surfaces that elevation happened.
-func (l *SyslogLogger) Allowed(input, asUser string) {
-	l.AllowedFrom(input, asUser, "")
+func (l *SyslogLogger) Allowed(input, currentUser string) {
+	l.AllowedFrom(input, currentUser, "")
 }
 
 // Denied records a rejected command. asUser is the user the caller asked to
 // run as (or the current user when no elevation was requested).
-func (l *SyslogLogger) Denied(input, asUser string) {
-	l.DeniedFrom(input, asUser, "")
+func (l *SyslogLogger) Denied(input, currentUser string) {
+	l.DeniedFrom(input, currentUser, "")
 }
 
 // AllowedFrom records a permitted command and additionally records the
 // origin user (the SUDO_USER who triggered elevation). Used by the
 // privileged half so the root-side audit line can be tied back to the
 // originating SSH user without timestamp correlation.
-func (l *SyslogLogger) AllowedFrom(input, asUser, origin string) {
+func (l *SyslogLogger) AllowedFrom(input, currentUser, originUser string) {
 	if l.w == nil {
 		return
 	}
-	l.w.Info(formatEvent("ALLOWED", l.user, asUser, origin, input))
+	l.w.Info(formatEvent("ALLOWED", l.user, currentUser, originUser, input))
 }
 
 // DeniedFrom is the denial counterpart of AllowedFrom.
-func (l *SyslogLogger) DeniedFrom(input, asUser, origin string) {
+func (l *SyslogLogger) DeniedFrom(input, currentUser, originUser string) {
 	if l.w == nil {
 		return
 	}
-	l.w.Warning(formatEvent("DENIED", l.user, asUser, origin, input))
+	l.w.Warning(formatEvent("DENIED", l.user, currentUser, originUser, input))
 }
 
 func (l *SyslogLogger) Close() error {

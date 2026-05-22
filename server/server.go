@@ -25,13 +25,13 @@ const (
 
 // Server holds the dependencies needed to serve JSON-RPC requests.
 type Server struct {
-	cfg     *config.Config
-	matcher *matcher.Matcher
-	log     *logger.SyslogLogger
-	user    string // current user
-	rrsh    string // path to this binary for elevation re-exec
-	in      *bufio.Reader
-	out     io.Writer
+	cfg         *config.Config
+	matcher     *matcher.Matcher
+	log         *logger.SyslogLogger
+	currentUser string // current currentUser
+	rrsh        string // path to this binary for elevation re-exec
+	in          *bufio.Reader
+	out         io.Writer
 }
 
 // New constructs a Server. `self` is the current SSH user (what "self"
@@ -44,13 +44,13 @@ func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader
 		return nil, fmt.Errorf("cannot resolve own executable path: %w", err)
 	}
 	return &Server{
-		cfg:     cfg,
-		matcher: matcher.New(cfg.Commands),
-		log:     log,
-		user:    user,
-		rrsh:    rrsh,
-		in:      bufio.NewReaderSize(in, maxRequestBytes),
-		out:     out,
+		cfg:         cfg,
+		matcher:     matcher.New(cfg.Commands),
+		log:         log,
+		currentUser: user,
+		rrsh:        rrsh,
+		in:          bufio.NewReaderSize(in, maxRequestBytes),
+		out:         out,
 	}, nil
 }
 
@@ -242,7 +242,7 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
-	commandForLog := formatCommandForLog(steps)
+	loggedCommand := formatCommandForLog(steps)
 	stages := make([]*exec.Stage, 0, len(steps))
 	requestedUsers := make([]string, 0, len(steps))
 	for i, step := range steps {
@@ -253,25 +253,22 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 		argv := step.Argv[1:]
 
 		// Make sure command is allowed
-		requestedUser := normalizeUser(step.As, s.user)
+		requestedUser := normalizeUser(step.As, s.currentUser)
 		requestedUsers = append(requestedUsers, requestedUser)
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
-			s.log.Denied(commandForLog, requestedUser)
+			s.log.Denied(loggedCommand, requestedUser)
 			return nil, deny("command not allowed: " + util.JoinForLog(path, argv))
 		}
 
 		// Make sure the requested user is allowed to run the command
-		if err := auth.Check(requestedUser, s.user, rule.As); err != nil {
-			s.log.Denied(commandForLog, requestedUser)
+		if err := auth.Check(requestedUser, auth.Resolve(rule.As, s.currentUser)); err != nil {
+			s.log.Denied(loggedCommand, requestedUser)
 			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), requestedUser))
 		}
 
-		// Maybe re-write command as: /usr/bin/sudo rrsh sudo <path> <argv>.
-		// If /etc/sudoers.d/rrsh isn't uncommented, the spawned sudo will
-		// fail with a clear "not allowed to execute" stderr that surfaces
-		// in result.stderr - no separate gate at this layer.
-		if requestedUser != s.user {
+		// Maybe re-write command as: /usr/bin/sudo rrsh sudo <path> <argv>
+		if requestedUser != s.currentUser {
 			path, argv = s.buildSudoCommand(requestedUser, path, argv)
 		}
 
@@ -288,11 +285,11 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 	}
 	// e.g. "root,deploy" for a mixed pipeline, or just s.user when no
 	// stage elevated (formatEvent then collapses to a single user= field).
-	auditUser := s.user
-	if elevated := dedup(requestedUsers, s.user); len(elevated) > 0 {
+	auditUser := s.currentUser
+	if elevated := dedup(requestedUsers, s.currentUser); len(elevated) > 0 {
 		auditUser = strings.Join(elevated, ",")
 	}
-	s.log.Allowed(commandForLog, auditUser)
+	s.log.Allowed(loggedCommand, auditUser)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
@@ -301,7 +298,7 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 //
 //	/usr/bin/sudo --non-interactive [--user=USER] -- /usr/bin/rrsh sudo <path> <argv...>
 //
-// -u is omitted when user == "root" (sudo defaults to root). The `--`
+// -u is omitted when currentUser == "root" (sudo defaults to root). The `--`
 // separator is defense in depth: s.rrsh comes from os.Executable() and
 // path is matcher-enforced absolute, so neither can be confused with a
 // sudo flag today, but `--` makes that resistance explicit and survives

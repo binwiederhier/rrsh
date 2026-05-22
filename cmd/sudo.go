@@ -27,13 +27,20 @@ func runSudo(args []string) {
 		os.Exit(exitDenied)
 	}
 
-	// Read current user
+	// Read current user, may be "root" or "deploy" (e.g. sudo -u deploy)
 	u, err := user.Current()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
 		os.Exit(exitGeneric)
 	}
 	currentUser := u.Username
+
+	// Ensure that we're calling via "sudo"
+	originUser := os.Getenv("SUDO_USER")
+	if originUser == "" {
+		fmt.Fprintln(os.Stderr, "rrsh: sudo: must be invoked via /usr/bin/sudo (SUDO_USER unset)")
+		os.Exit(exitDenied)
+	}
 
 	log := logger.New(currentUser)
 	defer log.Close()
@@ -46,33 +53,26 @@ func runSudo(args []string) {
 	}
 
 	// Read command and arguments
-	path := args[0]
-	argv := args[1:]
+	path, argv := args[0], args[1:]
 	input := util.JoinForLog(path, argv)
 
-	// origin = who asked for elevation. Falls back to me when invoked
-	// without /usr/bin/sudo in front (no real elevation happened).
-	sudoUser := os.Getenv("SUDO_USER")
-	if sudoUser == "" {
-		sudoUser = currentUser
-	}
-
+	// Check if the command is allowed
 	rule, ok := matcher.New(cfg.Commands).Match(path, argv)
 	if !ok {
-		log.DeniedFrom(input, currentUser, sudoUser)
+		log.DeniedFrom(input, currentUser, originUser)
 		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
 		os.Exit(exitDenied)
 	}
 
-	// Authorize: `me` (currentUser) must be in the rule's `as:` list, with
+	// Authorize: us (currentUser) must be in the rule's `as:` list, with
 	// "self" resolving to the originating SSH user (sudoUser).
-	if err := auth.Check(currentUser, sudoUser, rule.As); err != nil {
-		log.DeniedFrom(input, currentUser, sudoUser)
+	if err := auth.Check(currentUser, auth.Resolve(rule.As, originUser)); err != nil {
+		log.DeniedFrom(input, currentUser, originUser)
 		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, currentUser)
 		os.Exit(exitDenied)
 	}
 
-	log.AllowedFrom(input, currentUser, sudoUser)
+	log.AllowedFrom(input, currentUser, originUser)
 	res := exec.Execute(path, argv, rule, os.Stdin)
 	// Forward captured streams to our stdio so the parent's executor
 	// in the unprivileged half sees them on its pipe.
