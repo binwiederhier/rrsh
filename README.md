@@ -12,7 +12,7 @@ Zero runtime dependencies (Go stdlib only). Single static binary.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
 - Three methods are exposed: `hello` (host-specific instructions and the full allowlist), `run_command` (one allowlisted command), and `run_pipeline` (chained stages with native Go pipes).
 - Arguments are passed as a real `argv` array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
-- Commands are matched against `/etc/rrsh/rrsh.json` rules (override with `--config=` or `$RRSH_CONFIG`). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
+- Commands are matched against `/etc/rrsh/rrsh.json` rules (fixed path - both the server and the privileged `rrsh sudo` subcommand read the same file, so they cannot disagree about the allowlist). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
 
 ## Install

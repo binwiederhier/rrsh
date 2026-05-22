@@ -7,8 +7,7 @@ import (
 )
 
 const (
-	defaultConfigPath = "/etc/rrsh/rrsh.json"
-	envConfigPath     = "RRSH_CONFIG"
+	configPath = "/etc/rrsh/rrsh.json"
 
 	exitDenied  = 126
 	exitGeneric = 1
@@ -46,9 +45,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprint(w, `rrsh - JSON-RPC server for AI-driven remote command execution
 
 Usage:
-  rrsh                              read JSON-RPC requests from stdin (default)
-  rrsh --config <file>              same, with explicit config path
-  rrsh --help | --version
+  rrsh                       read JSON-RPC requests from stdin (default)
+  rrsh --help | --version    print help/version
+
+The config path is fixed at `+configPath+` - both the unprivileged
+server side and the privileged "rrsh sudo" subcommand read it.
 
 AI integration:
   Mention "ssh -T <user>@<host>" in CLAUDE.md/AGENTS.md so the AI calls hello
@@ -56,8 +57,6 @@ AI integration:
   directly over SSH stdin.
 
 Options:
-  --config <file>   config file (default: `+defaultConfigPath+`,
-                    overridden by $`+envConfigPath+`)
   --help            print this help
   --version         print version
 `)

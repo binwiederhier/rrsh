@@ -36,9 +36,8 @@ func runSudo(args []string) {
 	log := logger.New(currentUser)
 	defer log.Close()
 
-	// Hardcoded config path - the caller is untrusted, so we must not
-	// read --config or $RRSH_CONFIG here.
-	cfg, err := config.Load(defaultConfigPath)
+	// Load config
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
@@ -47,7 +46,7 @@ func runSudo(args []string) {
 	// Even though sudoers grants invocation, the operator must opt in
 	// via "sudo": true in the config. Closes accidental elevation.
 	if !cfg.Sudo {
-		fmt.Fprintln(os.Stderr, "rrsh: elevation disabled (set \"sudo\": true in "+defaultConfigPath+")")
+		fmt.Fprintln(os.Stderr, "rrsh: elevation disabled (set \"sudo\": true in "+configPath+")")
 		os.Exit(exitDenied)
 	}
 

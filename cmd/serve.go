@@ -22,7 +22,6 @@ func runServe(args []string) {
 		printUsage(os.Stderr)
 	}
 	var (
-		configFile  = fs.String("config", "", "")
 		commandFlag = fs.String("c", "", "")
 		showHelp    = fs.Bool("help", false, "")
 		showVersion = fs.Bool("version", false, "")
@@ -52,7 +51,7 @@ func runServe(args []string) {
 	defer log.Close()
 
 	// Load config
-	conf, err := config.Load(resolveConfigPath(*configFile))
+	conf, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
 		os.Exit(exitGeneric)
@@ -176,15 +175,4 @@ func isTerminal(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-// resolveConfigPath applies the precedence --config > $RRSH_CONFIG > default.
-func resolveConfigPath(flagValue string) string {
-	if flagValue != "" {
-		return flagValue
-	}
-	if env := os.Getenv(envConfigPath); env != "" {
-		return env
-	}
-	return defaultConfigPath
 }
