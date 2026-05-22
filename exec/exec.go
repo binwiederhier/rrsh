@@ -5,11 +5,64 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	osexec "os/exec"
+	"syscall"
+	"time"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/util"
 )
+
+// killGracePeriod gives the kernel a moment to deliver SIGKILL to every
+// member of the process group before Wait returns, so that fast-spawning
+// grandchildren can't outlive their parent's deadline.
+const killGracePeriod = 100 * time.Millisecond
+
+// newCmd builds an os/exec.Cmd configured with rrsh's three
+// defense-in-depth measures:
+//   - explicit minimal env (LD_PRELOAD, PYTHONSTARTUP, etc. from sshd
+//     cannot influence allowlisted children)
+//   - Setpgid so children form their own process group
+//   - Cancel/WaitDelay so context-deadline kills the whole group,
+//     not just the direct child (otherwise grandchildren leak past
+//     the rule's timeout)
+func newCmd(ctx context.Context, path string, argv ...string) *osexec.Cmd {
+	c := osexec.CommandContext(ctx, path, argv...)
+	c.Env = defaultEnv()
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		if c.Process == nil {
+			return os.ErrProcessDone
+		}
+		// Negative pid signals the entire process group, reaching
+		// children the direct child forked off.
+		return syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+	}
+	c.WaitDelay = killGracePeriod
+	return c
+}
+
+// defaultEnv returns the minimal environment passed to every child.
+// Inheriting rrsh's full environment would let an authenticated SSH
+// client influence allowlisted utilities via env vars sshd happens to
+// accept (LC_*, LANG, ...); pinning a small list closes that path.
+func defaultEnv() []string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/"
+	}
+	user := os.Getenv("USER")
+	if user == "" {
+		user = "rrsh"
+	}
+	return []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=" + home,
+		"LANG=C.UTF-8",
+		"USER=" + user,
+	}
+}
 
 // Execute runs a single command with optional stdin. ExitCode is the
 // child's exit, timeoutExitCode on deadline, or 1 on fork/exec errors.
@@ -24,7 +77,7 @@ func Execute(path string, argv []string, rule *config.CommandRule, stdin io.Read
 	stdout := util.NewCappedBuffer(maxOutputBytes)
 	stderr := util.NewCappedBuffer(maxOutputBytes)
 
-	c := osexec.CommandContext(ctx, path, argv...)
+	c := newCmd(ctx, path, argv...)
 	c.Stdout = stdout
 	c.Stderr = stderr
 	if stdin != nil {
@@ -85,7 +138,7 @@ func ExecutePipeline(stages []*Stage) *Result {
 	cmds := make([]*osexec.Cmd, len(stages))
 	stderrs := make([]*util.CappedBuffer, len(stages))
 	for i, s := range stages {
-		cmds[i] = osexec.CommandContext(ctx, s.Path, s.Argv...)
+		cmds[i] = newCmd(ctx, s.Path, s.Argv...)
 		stderrs[i] = util.NewCappedBuffer(maxOutputBytes)
 		cmds[i].Stderr = stderrs[i]
 	}
@@ -111,10 +164,18 @@ func ExecutePipeline(stages []*Stage) *Result {
 	// Start them all and wait
 	for _, c := range cmds {
 		if err := c.Start(); err != nil {
-			// Kill anything already started, best effort.
+			// Kill anything already started, then reap so the os/exec
+			// goroutines copying stdin/stdout for the killed children
+			// can finish - otherwise fds and goroutines leak for the
+			// lifetime of the SSH connection.
 			for _, started := range cmds {
 				if started.Process != nil {
 					_ = started.Process.Kill()
+				}
+			}
+			for _, started := range cmds {
+				if started.Process != nil {
+					_ = started.Wait()
 				}
 			}
 			return &Result{ExitCode: 1, Stderr: []byte("rrsh: pipeline start failed: " + err.Error() + "\n")}

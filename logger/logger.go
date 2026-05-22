@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"log/syslog"
 	"os"
+	"strings"
+
+	"github.com/binwiederhier/rrsh/util"
 )
 
 // SyslogLogger writes ALLOWED/DENIED events to the system auth log.
@@ -31,21 +34,36 @@ func New(username string) *SyslogLogger {
 
 // Allowed records a permitted command. asUser is the user the command will
 // actually run as (equal to the SSH user for un-elevated commands, "root" or
-// another user for elevated ones).
+// another user for elevated ones). For pipelines with mixed elevation, the
+// caller can pass a comma-joined list (e.g. "self,root") so the audit line
+// still surfaces that elevation happened.
 func (l *SyslogLogger) Allowed(input, asUser string) {
-	if l.w == nil {
-		return
-	}
-	l.w.Info(formatEvent("ALLOWED", l.user, asUser, input))
+	l.AllowedFrom(input, asUser, "")
 }
 
 // Denied records a rejected command. asUser is the user the caller asked to
 // run as (or the current user when no elevation was requested).
 func (l *SyslogLogger) Denied(input, asUser string) {
+	l.DeniedFrom(input, asUser, "")
+}
+
+// AllowedFrom records a permitted command and additionally records the
+// origin user (the SUDO_USER who triggered elevation). Used by the
+// privileged half so the root-side audit line can be tied back to the
+// originating SSH user without timestamp correlation.
+func (l *SyslogLogger) AllowedFrom(input, asUser, origin string) {
 	if l.w == nil {
 		return
 	}
-	l.w.Warning(formatEvent("DENIED", l.user, asUser, input))
+	l.w.Info(formatEvent("ALLOWED", l.user, asUser, origin, input))
+}
+
+// DeniedFrom is the denial counterpart of AllowedFrom.
+func (l *SyslogLogger) DeniedFrom(input, asUser, origin string) {
+	if l.w == nil {
+		return
+	}
+	l.w.Warning(formatEvent("DENIED", l.user, asUser, origin, input))
 }
 
 func (l *SyslogLogger) Close() error {
@@ -55,11 +73,25 @@ func (l *SyslogLogger) Close() error {
 	return l.w.Close()
 }
 
-// formatEvent omits the as= field when it equals the calling user - the
-// common no-elevation case stays uncluttered while elevated calls stand out.
-func formatEvent(kind, user, asUser, input string) string {
-	if asUser == "" || asUser == user {
-		return fmt.Sprintf("%s: user=%s cmd=%s", kind, user, input)
+// formatEvent renders one syslog line. The as= and origin= fields are
+// omitted when they equal user, keeping the common no-elevation case
+// uncluttered while elevated calls stand out. All identity fields are
+// escaped because an authenticated client controls the `as:` field
+// pre-validation and could otherwise embed `\n ALLOWED: ...` to forge
+// records; the command input is already escaped by util.JoinForLog at
+// the call site.
+func formatEvent(kind, user, asUser, origin, input string) string {
+	user = util.EscapeForLog(user)
+	asUser = util.EscapeForLog(asUser)
+	origin = util.EscapeForLog(origin)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: user=%s", kind, user)
+	if asUser != "" && asUser != user {
+		fmt.Fprintf(&b, " as=%s", asUser)
 	}
-	return fmt.Sprintf("%s: user=%s as=%s cmd=%s", kind, user, asUser, input)
+	if origin != "" && origin != user {
+		fmt.Fprintf(&b, " origin=%s", origin)
+	}
+	fmt.Fprintf(&b, " cmd=%s", input)
+	return b.String()
 }

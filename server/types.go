@@ -61,9 +61,13 @@ type runCommandParams struct {
 }
 
 // runPipelineParams is the request body of the `run_pipeline` method.
+// Pipeline is a value slice (not []*runStep) so a JSON `null` element
+// decodes as a zero-value runStep that the per-stage empty-argv check
+// rejects cleanly, rather than as a nil pointer that would panic on
+// the first field access.
 type runPipelineParams struct {
-	Pipeline []*runStep `json:"pipeline"`
-	Stdin    string     `json:"stdin,omitempty"`
+	Pipeline []runStep `json:"pipeline"`
+	Stdin    string    `json:"stdin,omitempty"`
 }
 
 // runStep is one stage of a pipeline.

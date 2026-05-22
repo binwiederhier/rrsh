@@ -25,6 +25,10 @@ func TestJoinForLog_EscapesControlChars(t *testing.T) {
 		{"clean", "/bin/echo", []string{"hello", "world"}, "/bin/echo hello world"},
 		{"path with newline", "/bin/x\n", nil, "/bin/x\\n"},
 		{"no argv", "/bin/whoami", nil, "/bin/whoami"},
+		{"esc", "/bin/echo", []string{"\x1b[2J"}, "/bin/echo \\x1b[2J"},
+		{"bel", "/bin/echo", []string{"a\x07b"}, "/bin/echo a\\x07b"},
+		{"del", "/bin/echo", []string{"a\x7fb"}, "/bin/echo a\\x7fb"},
+		{"tab kept", "/bin/echo", []string{"a\tb"}, "/bin/echo a\tb"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,7 +37,7 @@ func TestJoinForLog_EscapesControlChars(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("JoinForLog = %q, want %q", got, tc.want)
 			}
-			if strings.ContainsAny(got, "\n\r\x00") {
+			if strings.ContainsAny(got, "\n\r\x00\x1b\x07\x7f") {
 				t.Errorf("result still contains raw control bytes: %q", got)
 			}
 		})

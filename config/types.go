@@ -2,11 +2,6 @@ package config
 
 import "regexp"
 
-// SelfUser is the magic token in `as:` lists meaning "the SSH user who
-// invoked rrsh". Resolved at runtime against $SUDO_USER (privileged
-// subcommand) or the current user (unprivileged process).
-const SelfUser = "self"
-
 // validUsername is a conservative POSIX login-name pattern: lowercase
 // letter or underscore start, then alnum/underscore/dash.
 var validUsername = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
@@ -189,7 +190,7 @@ func (s *Server) handleHello() (any, *jsonrpcError) {
 		out = append(out, entry)
 	}
 	return &helloResult{
-		Instructions: s.cfg.Instructions,
+		Instructions: sanitizeDescription(s.cfg.Instructions),
 		Commands:     out,
 	}, nil
 }
@@ -209,7 +210,7 @@ func (s *Server) handleRunCommand(params json.RawMessage) (any, *jsonrpcError) {
 	} else if len(p.Argv) == 0 {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires non-empty argv"}
 	}
-	return s.runPipeline([]*runStep{{Argv: p.Argv, As: p.As}}, p.Stdin)
+	return s.runPipeline([]runStep{{Argv: p.Argv, As: p.As}}, p.Stdin)
 }
 
 // handleRunPipeline executes a multi-stage pipeline. `stdin` (if set)
@@ -237,12 +238,13 @@ func (s *Server) handleRunPipeline(params json.RawMessage) (any, *jsonrpcError) 
 // denials surface as JSON-RPC errors (code errDenied) so the AI client
 // gets a clean signal - the child's own non-zero exit lives in
 // result.exit, not in the RPC error envelope.
-func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcError) {
+func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcError) {
 	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
 	commandForLog := formatCommandForLog(steps)
 	stages := make([]*exec.Stage, 0, len(steps))
+	requestedUsers := make([]string, 0, len(steps))
 	for i, step := range steps {
 		if len(step.Argv) == 0 {
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty argv", i)}
@@ -252,6 +254,7 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 
 		// Make sure command is allowed
 		requestedUser := normalizeUser(step.As, s.user)
+		requestedUsers = append(requestedUsers, requestedUser)
 		rule, ok := s.matcher.Match(path, argv)
 		if !ok {
 			s.log.Denied(commandForLog, requestedUser)
@@ -259,7 +262,7 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 		}
 
 		// Make sure the requested user is allowed to run the command
-		if err := authorizeUser(requestedUser, s.user, rule.As); err != nil {
+		if err := auth.Check(requestedUser, s.user, rule.As); err != nil {
 			s.log.Denied(commandForLog, requestedUser)
 			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), requestedUser))
 		}
@@ -283,22 +286,32 @@ func (s *Server) runPipeline(steps []*runStep, stdinStr string) (any, *jsonrpcEr
 			Stdin: stdin,
 		})
 	}
-	s.log.Allowed(commandForLog, s.user)
+	// e.g. "root,deploy" for a mixed pipeline, or just s.user when no
+	// stage elevated (formatEvent then collapses to a single user= field).
+	auditUser := s.user
+	if elevated := dedup(requestedUsers, s.user); len(elevated) > 0 {
+		auditUser = strings.Join(elevated, ",")
+	}
+	s.log.Allowed(commandForLog, auditUser)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
 // buildSudoCommand produces (path, argv) suitable for exec.Execute to
 // spawn /usr/bin/sudo and re-enter rrsh's privileged half.
 //
-//	/usr/bin/sudo --non-interactive [--user=USER] /usr/bin/rrsh sudo <path> <argv...>
+//	/usr/bin/sudo --non-interactive [--user=USER] -- /usr/bin/rrsh sudo <path> <argv...>
 //
-// -u is omitted when user == "root" (sudo defaults to root).
+// -u is omitted when user == "root" (sudo defaults to root). The `--`
+// separator is defense in depth: s.rrsh comes from os.Executable() and
+// path is matcher-enforced absolute, so neither can be confused with a
+// sudo flag today, but `--` makes that resistance explicit and survives
+// any future regression in those upstream invariants.
 func (s *Server) buildSudoCommand(user, path string, argv []string) (string, []string) {
 	args := []string{"--non-interactive"}
 	if user != "root" {
 		args = append(args, "--user="+user)
 	}
-	args = append(args, s.rrsh, "sudo", path)
+	args = append(args, "--", s.rrsh, "sudo", path)
 	args = append(args, argv...)
 	return "/usr/bin/sudo", args
 }

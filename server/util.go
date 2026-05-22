@@ -2,18 +2,13 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/binwiederhier/rrsh/config"
+	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/util"
 )
-
-// errUserNotPermitted is returned by authorizeUser when the requested
-// target user is not allowed by the matched rule's `as:` list.
-var errUserNotPermitted = errors.New("requested user not permitted by rule's as: list")
 
 // toRunResult converts the executor's internal Result into the wire shape.
 func toRunResult(res *exec.Result) *runResult {
@@ -70,30 +65,33 @@ func safeUTF8(b []byte) string {
 
 // normalizeUser resolves "" or "self" to the SSH user
 func normalizeUser(requestedUser, currentUser string) string {
-	if requestedUser == "" || requestedUser == config.SelfUser {
+	if requestedUser == "" || requestedUser == auth.SelfUser {
 		return currentUser
 	}
 	return requestedUser
 }
 
-// authorizeUser returns errUserNotPermitted if runAsUser is not in the
-// rule's allowed list. "self" entries in the list are substituted with
-// currentUser before comparison. runAsUser must already be normalized.
-func authorizeUser(requestedUser, currentUser string, allowedUsers []string) error {
-	for _, u := range allowedUsers {
-		if u == config.SelfUser {
-			u = currentUser
+// dedup returns the input with `drop` and any subsequent duplicate
+// entries removed, preserving the order of first appearance.
+func dedup(in []string, drop string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == drop {
+			continue
 		}
-		if u == requestedUser {
-			return nil
+		if _, ok := seen[s]; ok {
+			continue
 		}
+		seen[s] = struct{}{}
+		out = append(out, s)
 	}
-	return errUserNotPermitted
+	return out
 }
 
 // formatCommandForLog formats a pipeline as a single space-joined string for
 // syslog. Stages are joined with " | " for readability.
-func formatCommandForLog(stages []*runStep) string {
+func formatCommandForLog(stages []runStep) string {
 	parts := make([]string, len(stages))
 	for i, st := range stages {
 		path := ""

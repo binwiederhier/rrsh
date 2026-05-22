@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/logger"
 )
@@ -22,7 +23,7 @@ func testRule(command ...string) config.CommandRule {
 	return config.CommandRule{
 		CommandPatterns: patterns,
 		CommandSource:   append([]string(nil), command...),
-		As:              []string{config.SelfUser},
+		As:              []string{auth.SelfUser},
 	}
 }
 
@@ -404,6 +405,32 @@ func TestServer_Run_ElevationReachesExecutor(t *testing.T) {
 	resps := decodeResponses(t, out.String())
 	if _, isErr := resps[0]["error"]; isErr {
 		t.Fatalf("expected result envelope (executor reached), got error: %v", resps[0])
+	}
+}
+
+// TestServer_Run_PipelineNullStageRejected covers a panic that a null
+// pipeline stage used to trigger when runPipelineParams.Pipeline was
+// []*runStep: a JSON null element decoded to a nil pointer that the
+// first field access dereferenced. With Pipeline as a value slice the
+// stage decodes to a zero-value runStep and the per-stage empty-argv
+// check rejects it cleanly.
+func TestServer_Run_PipelineNullStageRejected(t *testing.T) {
+	t.Parallel()
+	in := `{"jsonrpc":"2.0","id":1,"method":"run_pipeline","params":{"pipeline":[{"argv":["/bin/echo","x"]},null]}}` + "\n"
+	out, err := testServer(t, in)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	resps := decodeResponses(t, out.String())
+	if len(resps) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resps))
+	}
+	errObj, ok := resps[0]["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error envelope, got: %v", resps[0])
+	}
+	if int(errObj["code"].(float64)) != errInvalidParams {
+		t.Errorf("code = %v, want %d", errObj["code"], errInvalidParams)
 	}
 }
 

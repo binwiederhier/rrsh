@@ -7,6 +7,8 @@ import (
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/binwiederhier/rrsh/auth"
 )
 
 // Config is the parsed allowlist. See README for the JSON schema.
@@ -23,12 +25,22 @@ type CommandRule struct {
 	CommandPatterns []*regexp.Regexp
 	CommandSource   []string
 	Timeout         time.Duration
-	As              []string // defaults to [SelfUser]
+	As              []string // defaults to [auth.SelfUser]
 	Description     string
 }
 
-// Load reads and parses the config file at path.
+// Load reads and parses the config file at path. Refuses to load when
+// the file is group- or world-writable: a misconfigured /etc/rrsh/rrsh.json
+// would let the rrsh user (or anyone in its group) rewrite the allowlist
+// and, with the sudoers grant in place, escalate to root.
 func Load(path string) (*Config, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat config: %w", err)
+	}
+	if mode := info.Mode().Perm(); mode&0o022 != 0 {
+		return nil, fmt.Errorf("refusing to load config %s: file is group/world-writable (mode %04o)", path, mode)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
@@ -97,18 +109,16 @@ func convertRule(r rawRule) (CommandRule, error) {
 // into error messages so the operator can find the offending rule.
 func normalizeAs(pathHint string, as []string) ([]string, error) {
 	if len(as) == 0 {
-		return []string{SelfUser}, nil
+		return []string{auth.SelfUser}, nil
 	}
 	seen := make(map[string]bool, len(as))
 	out := make([]string, 0, len(as))
 	for _, u := range as {
 		if u == "" {
 			return nil, fmt.Errorf("`as` for %s has an empty entry", pathHint)
-		}
-		if seen[u] {
+		} else if seen[u] {
 			return nil, fmt.Errorf("`as` for %s has duplicate entry %q", pathHint, u)
-		}
-		if u != SelfUser && !validUsername.MatchString(u) {
+		} else if u != auth.SelfUser && !validUsername.MatchString(u) {
 			return nil, fmt.Errorf("`as` for %s has invalid username %q (expected POSIX login name)", pathHint, u)
 		}
 		seen[u] = true

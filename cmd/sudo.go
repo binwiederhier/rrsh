@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/user"
 
+	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
@@ -26,6 +27,7 @@ func runSudo(args []string) {
 		os.Exit(exitDenied)
 	}
 
+	// Read current user
 	u, err := user.Current()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
@@ -43,43 +45,34 @@ func runSudo(args []string) {
 		os.Exit(exitGeneric)
 	}
 
+	// Read command and arguments
 	path := args[0]
 	argv := args[1:]
 	input := util.JoinForLog(path, argv)
 
 	// origin = who asked for elevation. Falls back to me when invoked
 	// without /usr/bin/sudo in front (no real elevation happened).
-	origin := os.Getenv("SUDO_USER")
-	if origin == "" {
-		origin = currentUser
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser == "" {
+		sudoUser = currentUser
 	}
 
 	rule, ok := matcher.New(cfg.Commands).Match(path, argv)
 	if !ok {
-		log.Denied(input, currentUser)
+		log.DeniedFrom(input, currentUser, sudoUser)
 		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
 		os.Exit(exitDenied)
 	}
 
-	// Authorize: `me` must be in the rule's `as:` list, with "self"
-	// resolving to the origin user.
-	authorized := false
-	for _, allowed := range rule.As {
-		if allowed == config.SelfUser {
-			allowed = origin
-		}
-		if allowed == currentUser {
-			authorized = true
-			break
-		}
-	}
-	if !authorized {
-		log.Denied(input, currentUser)
+	// Authorize: `me` (currentUser) must be in the rule's `as:` list, with
+	// "self" resolving to the originating SSH user (sudoUser).
+	if err := auth.Check(currentUser, sudoUser, rule.As); err != nil {
+		log.DeniedFrom(input, currentUser, sudoUser)
 		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, currentUser)
 		os.Exit(exitDenied)
 	}
 
-	log.Allowed(input, currentUser)
+	log.AllowedFrom(input, currentUser, sudoUser)
 	res := exec.Execute(path, argv, rule, os.Stdin)
 	// Forward captured streams to our stdio so the parent's executor
 	// in the unprivileged half sees them on its pipe.

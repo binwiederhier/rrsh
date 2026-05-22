@@ -1,9 +1,13 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/binwiederhier/rrsh/auth"
 )
 
 func TestParse_Valid(t *testing.T) {
@@ -194,7 +198,7 @@ func TestParse_AsDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for i, r := range cfg.Commands {
-		if len(r.As) != 1 || r.As[0] != SelfUser {
+		if len(r.As) != 1 || r.As[0] != auth.SelfUser {
 			t.Errorf("command[%d].As = %v, want [self]", i, r.As)
 		}
 	}
@@ -280,6 +284,43 @@ func TestParse_RejectsMalformedJSON(t *testing.T) {
 	_, err := Parse([]byte(`{{{`))
 	if err == nil {
 		t.Fatal("expected error for malformed JSON")
+	}
+}
+
+// TestLoad_RejectsGroupWritable covers the permission-check guard in
+// Load: a /etc/rrsh/rrsh.json that anyone in the rrsh group can rewrite
+// would let that group escalate via the sudoers grant.
+func TestLoad_RejectsGroupWritable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rrsh.json")
+	if err := os.WriteFile(path, []byte(`{"commands":[]}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Chmod separately so umask doesn't strip the group-write bit.
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("Load should reject 0o664 config, got: %v", err)
+	}
+}
+
+// TestLoad_AcceptsRestrictiveMode verifies the happy path: a 0o600
+// config loads cleanly.
+func TestLoad_AcceptsRestrictiveMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rrsh.json")
+	if err := os.WriteFile(path, []byte(`{"commands":[{"command":["/bin/echo"]}]}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cfg.Commands))
 	}
 }
 
