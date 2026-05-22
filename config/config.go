@@ -9,10 +9,15 @@ import (
 	"time"
 )
 
-// SelfUser is the magic token in `as:` lists meaning "the SSH user who
-// invoked rrsh". Resolved at runtime against $SUDO_USER (privileged
-// subcommand) or the current user (unprivileged process).
-const SelfUser = "self"
+// Config is the parsed allowlist. See README for the JSON schema.
+//
+// Sudo is the master switch for elevation: even with the sudoers grant
+// in place, every `as:`-other-than-self call is denied until Sudo=true.
+type Config struct {
+	Instructions string
+	Sudo         bool
+	Commands     []CommandRule
+}
 
 // CommandRule is one allowlist entry. CommandPatterns is the rule's
 // structural spec: index 0 matches the binary path, indices 1..N-1
@@ -24,29 +29,6 @@ type CommandRule struct {
 	Timeout         time.Duration
 	As              []string // defaults to [SelfUser]
 	Description     string
-}
-
-// Config is the parsed allowlist. See README for the JSON schema.
-//
-// Sudo is the master switch for elevation: even with the sudoers grant
-// in place, every `as:`-other-than-self call is denied until Sudo=true.
-type Config struct {
-	Instructions string
-	Sudo         bool
-	Commands     []CommandRule
-}
-
-type rawConfig struct {
-	Instructions string    `json:"instructions"`
-	Sudo         bool      `json:"sudo"`
-	Commands     []rawRule `json:"commands"`
-}
-
-type rawRule struct {
-	Command     []string `json:"command"`
-	Timeout     string   `json:"timeout"`
-	As          []string `json:"as"`
-	Description string   `json:"description"`
 }
 
 // Load reads and parses the config file at path.
@@ -115,12 +97,6 @@ func convertRule(r rawRule) (CommandRule, error) {
 	rule.Description = r.Description
 	return rule, nil
 }
-
-// validUsername is a conservative POSIX login-name pattern: lowercase
-// letter or underscore start, then alnum/underscore/dash, up to 32
-// chars, optionally trailing `$` (Samba). Rejects names that would
-// look like sudo flags ("-h", "--", "-u").
-var validUsername = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}\$?$`)
 
 // normalizeAs validates `as:` and defaults to ["self"]. pathHint goes
 // into error messages so the operator can find the offending rule.

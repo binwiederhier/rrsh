@@ -12,9 +12,6 @@ import (
 	"github.com/binwiederhier/rrsh/util"
 )
 
-// envSudoUser is the env var sudo sets to the original invoking user.
-const envSudoUser = "SUDO_USER"
-
 // runSudo is the privileged half of rrsh's elevation flow, invoked as
 //
 //	/usr/bin/sudo [-u USER] /usr/bin/rrsh sudo <path> <argv...>
@@ -34,9 +31,9 @@ func runSudo(args []string) {
 		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
 		os.Exit(exitGeneric)
 	}
-	me := u.Username
+	currentUser := u.Username
 
-	log := logger.New(me)
+	log := logger.New(currentUser)
 	defer log.Close()
 
 	// Hardcoded config path - the caller is untrusted, so we must not
@@ -60,14 +57,14 @@ func runSudo(args []string) {
 
 	// origin = who asked for elevation. Falls back to me when invoked
 	// without /usr/bin/sudo in front (no real elevation happened).
-	origin := os.Getenv(envSudoUser)
+	origin := os.Getenv("SUDO_USER")
 	if origin == "" {
-		origin = me
+		origin = currentUser
 	}
 
 	rule, ok := matcher.New(cfg.Commands).Match(path, argv)
 	if !ok {
-		log.Denied(input, me)
+		log.Denied(input, currentUser)
 		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
 		os.Exit(exitDenied)
 	}
@@ -79,18 +76,18 @@ func runSudo(args []string) {
 		if allowed == config.SelfUser {
 			allowed = origin
 		}
-		if allowed == me {
+		if allowed == currentUser {
 			authorized = true
 			break
 		}
 	}
 	if !authorized {
-		log.Denied(input, me)
-		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, me)
+		log.Denied(input, currentUser)
+		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, currentUser)
 		os.Exit(exitDenied)
 	}
 
-	log.Allowed(input, me)
+	log.Allowed(input, currentUser)
 	res := exec.Execute(path, argv, rule, os.Stdin)
 	// Forward captured streams to our stdio so the parent's executor
 	// in the unprivileged half sees them on its pipe.

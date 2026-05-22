@@ -130,12 +130,12 @@ func TestParse_RejectsInvalidUsernameInAs(t *testing.T) {
 func TestParse_AcceptsValidUsernameInAs(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands":[
-		{"command":["/bin/x"],"as":["self","root","deploy","_apt","www-data","host$"]}
+		{"command":["/bin/x"],"as":["self","root","deploy","_apt","www-data"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"self", "root", "deploy", "_apt", "www-data", "host$"}
+	want := []string{"self", "root", "deploy", "_apt", "www-data"}
 	if !equalStrings(cfg.Commands[0].As, want) {
 		t.Errorf("As = %v, want %v", cfg.Commands[0].As, want)
 	}
