@@ -51,7 +51,7 @@ The config path is fixed at `+configPath+` - both the unprivileged
 server side and the privileged "rrsh sudo" subcommand read it.
 
 AI integration:
-  Mention "ssh -T <user>@<host>" in CLAUDE.md/AGENTS.md so the AI calls hello
+  Mention "ssh -T <user>@<host>" in CLAUDE.md/AGENTS.md so the AI calls list_commands
   (returns the full allowlist) and then run_command or run_pipeline
   directly over SSH stdin.
 

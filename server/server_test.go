@@ -109,7 +109,7 @@ func decodeRunResult(t *testing.T, m map[string]any) runResult {
 	return rr
 }
 
-func TestServer_Hello(t *testing.T) {
+func TestServer_ListCommands(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
 		Instructions: "You are on the ntfy prod box.",
@@ -117,7 +117,7 @@ func TestServer_Hello(t *testing.T) {
 	}
 	cfg.Commands[0].Description = "Echo something."
 	out := &bytes.Buffer{}
-	in := `{"jsonrpc":"2.0","id":1,"method":"hello"}` + "\n"
+	in := `{"jsonrpc":"2.0","id":1,"method":"list_commands"}` + "\n"
 	srv := mustNewServer(t, cfg, "tester", in, out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -131,17 +131,17 @@ func TestServer_Hello(t *testing.T) {
 		t.Fatalf("expected result, got: %v", resps[0])
 	}
 	if _, present := result["name"]; present {
-		t.Errorf("hello result should not include a name field, got: %v", result)
+		t.Errorf("list_commands result should not include a name field, got: %v", result)
 	}
 	if _, present := result["version"]; present {
-		t.Errorf("hello result should not include a version field, got: %v", result)
+		t.Errorf("list_commands result should not include a version field, got: %v", result)
 	}
 	if result["instructions"] != cfg.Instructions {
 		t.Errorf("instructions = %v, want %q", result["instructions"], cfg.Instructions)
 	}
 	commands, ok := result["commands"].([]any)
 	if !ok {
-		t.Fatalf("hello.commands missing or wrong type: %v", result)
+		t.Fatalf("list_commands.commands missing or wrong type: %v", result)
 	}
 	if len(commands) != 1 {
 		t.Fatalf("got %d commands, want 1", len(commands))
@@ -152,9 +152,9 @@ func TestServer_Hello(t *testing.T) {
 	}
 }
 
-func TestServer_Hello_OmitsEmptyInstructions(t *testing.T) {
+func TestServer_ListCommands_OmitsEmptyInstructions(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":1,"method":"hello"}` + "\n"
+	in := `{"jsonrpc":"2.0","id":1,"method":"list_commands"}` + "\n"
 	out, _ := testServer(t, in)
 	if strings.Contains(out.String(), `"instructions"`) {
 		t.Errorf("instructions field should be omitted when empty, got: %s", out.String())
@@ -315,7 +315,7 @@ func TestServer_Notification_NoResponse(t *testing.T) {
 
 func TestServer_MultipleRequests(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":1,"method":"hello"}` + "\n" +
+	in := `{"jsonrpc":"2.0","id":1,"method":"list_commands"}` + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/bin/echo","x"]}}` + "\n" +
 		`{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"argv":["/bin/echo","y"]}}` + "\n"
 	out, _ := testServer(t, in)
@@ -368,7 +368,7 @@ func TestServer_Run_OversizedRequestRejected(t *testing.T) {
 	huge := strings.Repeat("x", maxRequestBytes+1024)
 	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"argv":["/bin/echo","` + huge + `"]}}` + "\n" +
 		// Follow with a valid request to confirm we resync.
-		`{"jsonrpc":"2.0","id":2,"method":"hello"}` + "\n"
+		`{"jsonrpc":"2.0","id":2,"method":"list_commands"}` + "\n"
 	out, err := testServer(t, in)
 	if err != nil {
 		t.Fatalf("Serve error: %v", err)

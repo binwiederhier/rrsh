@@ -8,7 +8,7 @@ Here's a super simple example:
 
 ```bash
 # Lists all allowed commands
-echo '{"jsonrpc":"2.0","id":1,"method":"hello"}' | ssh -T -i ~/.ssh/id_ai rrsh@host 
+echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T -i ~/.ssh/id_ai rrsh@host 
 
 # Do some diagnostics (depends on allowed commands)
 echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/systemctl", "status", "ntfy"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host
@@ -59,7 +59,7 @@ Without the uncommented sudoers grant, the spawned sudo fails and the error surf
 
 ```json
 {
-  "instructions": "You are on the ntfy production server. The `hello.commands` array above lists what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
+  "instructions": "You are on the ntfy production server. The `list_commands.commands` array above lists what is permitted. Most commands run as the SSH user; the systemctl restart rules require as=root.",
   "commands": [
     { "command": ["/usr/bin/whoami"],
       "description": "Show the effective username." },
@@ -83,7 +83,7 @@ Top-level fields:
 
 | Field          | Default     | Meaning                                                                                                       |
 | -------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `instructions` | empty       | Returned in `hello.instructions` - the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
+| `instructions` | empty       | Returned in `list_commands.instructions` - the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
 | `commands`     | required    | Array of allowlist rules.                                                                                     |
 
 There is no top-level `timeout`. Every command runs with a fixed 30-second deadline unless its rule sets its own `timeout`. Letting operators raise the global timeout would silently let runaway commands hold the JSON-RPC channel hostage; per-rule overrides preserve that guardrail while letting genuinely long-running diagnostics (e.g. `ping -c 100 host`) opt out.
@@ -95,7 +95,7 @@ Fields on each command entry:
 | `command`     | required      | List of regexes (length ≥ 1). Element 0 matches the binary path; elements 1..N-1 match argv 1-for-1. A call passes only if path matches command[0] AND argv has exactly `len(command)-1` elements AND every argv[i] matches command[i+1]. Patterns are auto-anchored. |
 | `timeout`     | `"30s"`       | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
 | `as`          | `["$USER"]`   | Users the command may run as. `$USER` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
-| `description` | empty         | Free-text shown to Claude in `hello.commands[*].description`. Treat it like an API doc string. Control characters are stripped before being sent. |
+| `description` | empty         | Free-text shown to Claude in `list_commands.commands[*].description`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
 Rules:
 
@@ -110,7 +110,7 @@ Rules:
 
 - Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
-- Three methods are exposed: `hello` (host-specific instructions and the full allowlist), `run_command` (one allowlisted command), and `run_pipeline` (chained stages with native Go pipes).
+- Three methods are exposed: `list_commands` (host-specific instructions and the full allowlist), `run_command` (one allowlisted command), and `run_pipeline` (chained stages with native Go pipes).
 - Arguments are passed as a real `argv` array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
 - Commands are matched against `/etc/rrsh/rrsh.json` rules (fixed path - both the server and the privileged `rrsh sudo` subcommand read the same file, so they cannot disagree about the allowlist). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
@@ -120,13 +120,13 @@ Rules:
 Plain JSON-RPC 2.0 over NDJSON. Send one request per line on stdin, get one response per line on stdout. Three methods, no notifications required, no initialize handshake.
 
 ```text
-{"jsonrpc":"2.0","id":1,"method":"hello"}
+{"jsonrpc":"2.0","id":1,"method":"list_commands"}
 {"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/whoami"]}}
 ```
 
 Server-side refusals (matcher denial, elevation disabled, oversize pipeline) come back as the JSON-RPC `error` envelope with application code `-32000`. A child process's own non-zero exit is **not** an RPC error - it lives in `result.exit`. `run_command` and `run_pipeline` return the same `result` shape.
 
-### `hello`
+### `list_commands`
 
 No params. Returns `{instructions, commands}`. `instructions` is the host-specific guidance an operator put in the config - Claude should read it first. `commands` is the full allowlist: each entry is `{command, as, description?, timeout_seconds?}` where `command` is the operator-authored regex list (element 0 = path regex, elements 1..N-1 = argv regexes). One round-trip is enough to discover everything.
 
@@ -190,7 +190,7 @@ When a rule's `as` list contains a user other than `$USER`, Claude must request 
 | `{argv: [...], as: "root"}`                        | run as `root` (only valid if `root` is in the rule's `as`)                   |
 | `{argv: [...], as: "deploy"}`                      | run as `deploy` (only valid if `deploy` is in the rule's `as`)               |
 
-The AI sees each rule's `as` list in `hello.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `$USER` is a denial.
+The AI sees each rule's `as` list in `list_commands.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `$USER` is a denial.
 
 Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo. The gate is **the sudoers grant** at `/etc/sudoers.d/rrsh`:
 

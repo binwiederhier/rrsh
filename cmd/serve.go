@@ -74,7 +74,7 @@ func printShellHelp(w io.Writer) {
 	fmt.Fprintf(w, `rrsh: a JSON-RPC server for server diagnostics, not an interactive shell.
 
 Send newline-delimited JSON-RPC 2.0 requests over SSH stdin. Three methods:
-  hello          - host-specific instructions and the full allowlist
+  list_commands  - host-specific instructions and the full allowlist
   run_command    - execute one allowlisted command
   run_pipeline   - chain stages with native Go pipes (no shell)
 
@@ -88,14 +88,14 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    you've forgotten the allowlist) - it is NOT required before every run,
    just for initial discovery:
 
-  echo '{"jsonrpc":"2.0","id":1,"method":"hello"}' | ssh -T %[1]s
+  echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T %[1]s
 
    The result has {instructions, commands}. Read
    "instructions" - it's host-specific guidance. Each entry in
    "commands" has a regex list: command[0] matches argv[0] (the path),
    command[i] matches argv[i]. len(argv) must equal len(command).
    Once you know what's allowed, jump straight to "run_command" or
-   "run_pipeline" - no need to resend "hello" for subsequent calls.
+   "run_pipeline" - no need to resend "list_commands" for subsequent calls.
 
 2) Run one command as the SSH user (default):
 
@@ -135,7 +135,7 @@ and truncated. Always send a unique numeric "id" so you can correlate.
 6) Batch multiple requests in one SSH session, one JSON object per line:
 
   printf '%%s\n' \
-    '{"jsonrpc":"2.0","id":1,"method":"hello"}' \
+    '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' \
     '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/whoami"]}}' \
     '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"argv":["/usr/bin/uptime"]}}' \
     | ssh -T %[1]s

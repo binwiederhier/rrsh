@@ -34,15 +34,15 @@ type jsonrpcError struct {
 	Message string `json:"message"`
 }
 
-// helloResult: host-specific Instructions plus the full Commands
+// listCommandsResult: host-specific Instructions plus the full Commands
 // allowlist, so the AI gets everything in one round-trip.
-type helloResult struct {
+type listCommandsResult struct {
 	Instructions string          `json:"instructions,omitempty"`
 	Commands     []*commandEntry `json:"commands"`
 }
 
-// commandEntry: one hello.commands element. Command[0] matches the
-// binary path; [1..N-1] match argv 1-for-1.
+// commandEntry: one list_commands.commands element. Command[0] matches
+// the binary path; [1..N-1] match argv 1-for-1.
 type commandEntry struct {
 	Command     []string `json:"command"`
 	As          []string `json:"as"`

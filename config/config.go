@@ -19,7 +19,7 @@ type Config struct {
 
 // CommandRule is one allowlist entry. CommandPatterns[0] matches the
 // binary path; [1..N-1] match argv 1-for-1. CommandSource keeps the
-// original regex strings for hello's response.
+// original regex strings for list_commands' response.
 type CommandRule struct {
 	CommandPatterns []*regexp.Regexp
 	CommandSource   []string

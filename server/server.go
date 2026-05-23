@@ -159,8 +159,8 @@ func (s *Server) handle(data []byte) *jsonrpcResponse {
 // dispatch routes a parsed request to its handler.
 func (s *Server) dispatch(method string, params json.RawMessage) (any, *jsonrpcError) {
 	switch method {
-	case "hello":
-		return s.handleHello()
+	case "list_commands":
+		return s.handleListCommands()
 	case "run_command":
 		return s.handleRunCommand(params)
 	case "run_pipeline":
@@ -170,7 +170,7 @@ func (s *Server) dispatch(method string, params json.RawMessage) (any, *jsonrpcE
 	}
 }
 
-func (s *Server) handleHello() (any, *jsonrpcError) {
+func (s *Server) handleListCommands() (any, *jsonrpcError) {
 	out := make([]*commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
 		entry := &commandEntry{
@@ -183,7 +183,7 @@ func (s *Server) handleHello() (any, *jsonrpcError) {
 		}
 		out = append(out, entry)
 	}
-	return &helloResult{
+	return &listCommandsResult{
 		Instructions: sanitizeDescription(s.cfg.Instructions),
 		Commands:     out,
 	}, nil
@@ -276,15 +276,15 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 // buildSudoCommand returns (path, argv) that spawns /usr/bin/sudo
 // to re-enter rrsh's privileged half:
 //
-//	/usr/bin/sudo --non-interactive [--user=USER] -- /usr/bin/rrsh sudo <path> <argv...>
+//	/usr/bin/sudo -n [-u USER] -- /usr/bin/rrsh sudo <path> <argv...>
 //
 // -u is omitted for root (sudo's default). The `--` is defense-in-depth:
 // s.rrsh and path are both absolute today, but `--` protects against a
 // future regression in either invariant.
 func (s *Server) buildSudoCommand(user, path string, argv []string) (string, []string) {
-	args := []string{"--non-interactive"}
+	args := []string{"-n"}
 	if user != "root" {
-		args = append(args, "--user="+user)
+		args = append(args, "-u", user)
 	}
 	args = append(args, "--", s.rrsh, "sudo", path)
 	args = append(args, argv...)

@@ -5,9 +5,9 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 ## What it is
 
 - A plain JSON-RPC 2.0 server speaking NDJSON over stdio. Not MCP - see [Wire format note](#wire-format-note).
-- Three methods: `hello` (instructions and the full allowlist in one round-trip), `run_command` (one allowlisted argv), and `run_pipeline` (multi-stage pipeline). `run_command` is a thin wrapper - it desugars to a one-stage pipeline so both shapes share the same execution path.
+- Three methods: `list_commands` (instructions and the full allowlist in one round-trip), `run_command` (one allowlisted argv), and `run_pipeline` (multi-stage pipeline). `run_command` is a thin wrapper - it desugars to a one-stage pipeline so both shapes share the same execution path.
 - All arguments are passed as real `argv` slices - no shell tokenization anywhere on the trust boundary.
-- Designed to be reachable as `ssh -T rrsh@host` from a Claude session. The intended deployment story is to mention rrsh hosts in CLAUDE.md (no client-side MCP registration); rrsh self-describes via the `hello.instructions` field and an instructive rejection on shell-mode attempts.
+- Designed to be reachable as `ssh -T rrsh@host` from a Claude session. The intended deployment story is to mention rrsh hosts in CLAUDE.md (no client-side MCP registration); rrsh self-describes via the `list_commands.instructions` field and an instructive rejection on shell-mode attempts.
 
 ## Layout
 
@@ -17,7 +17,7 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 | `config/` | JSON config parser. Strict - `DisallowUnknownFields` everywhere. |
 | `matcher/` | (path, argv) -> rule lookup. Per-element regex (path = command[0], argv[i] = command[i+1]). |
 | `exec/` | Runs single commands or native Go pipelines. `exec/exec.go` holds the `Execer` type and methods; `exec/types.go` holds the package-private consts (`defaultTimeout`, `maxOutputBytes`, `timeoutExitCode`) and exported `Stage`/`Result` types. Captures stdout/stderr via `util.CappedBuffer`. |
-| `server/` | JSON-RPC 2.0 server: NDJSON framing, three-method API (`hello`/`run_command`/`run_pipeline`). `server/types.go` holds wire types + JSON-RPC error codes; `server/server.go` holds the dispatch loop and handlers; `server/util.go` holds pure helpers. |
+| `server/` | JSON-RPC 2.0 server: NDJSON framing, three-method API (`list_commands`/`run_command`/`run_pipeline`). `server/types.go` holds wire types + JSON-RPC error codes; `server/server.go` holds the dispatch loop and handlers; `server/util.go` holds pure helpers. |
 | `logger/` | Syslog wrapper for `auth.info`/`auth.warning` ALLOWED/DENIED records. |
 | `util/` | Tiny stdlib-only helpers. Currently just `util/buffer.go` (`CappedBuffer`, used by `exec` for bounded subprocess output). |
 | `pkg/` | Files that the package installs, mirroring their destination paths. `pkg/etc/rrsh/rrsh.json.example`, `pkg/etc/sudoers.d/rrsh`, `pkg/var/lib/rrsh/.hushlogin`. |
@@ -57,7 +57,7 @@ The privileged half (`cmd/sudo.go`) deliberately does NOT import `server/`. That
 
 ## Wire format note
 
-rrsh used to expose an MCP-compatible surface (`initialize`/`tools/list`/`tools/call`). It no longer does. The protocol is now plain JSON-RPC 2.0 over NDJSON with three methods: `hello`, `run_command`, and `run_pipeline`. The `hello` response carries the host-specific `instructions` *and* the full allowlist - one round-trip gives the AI everything it needs. Server-side refusals (matcher denial, elevation disabled, oversize pipeline) use the JSON-RPC `error` envelope with code `-32000`. A child process's own non-zero exit is **not** an RPC error - it lives in `result.exit`. See the README's "Wire format" section for the wire shape.
+rrsh used to expose an MCP-compatible surface (`initialize`/`tools/list`/`tools/call`). It no longer does. The protocol is now plain JSON-RPC 2.0 over NDJSON with three methods: `list_commands`, `run_command`, and `run_pipeline`. The `list_commands` response carries the host-specific `instructions` *and* the full allowlist - one round-trip gives the AI everything it needs. Server-side refusals (matcher denial, elevation disabled, oversize pipeline) use the JSON-RPC `error` envelope with code `-32000`. A child process's own non-zero exit is **not** an RPC error - it lives in `result.exit`. See the README's "Wire format" section for the wire shape.
 
 The binary's own version (from goreleaser's ldflags) is only used by `rrsh --version` and is not exposed over the JSON-RPC wire.
 
