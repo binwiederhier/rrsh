@@ -47,7 +47,7 @@ func runServe(args []string) {
 	}
 
 	// Start syslog logger
-	log := logger.New(u.Username)
+	log := logger.New()
 	defer log.Close()
 
 	// Load config

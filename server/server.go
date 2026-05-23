@@ -242,55 +242,45 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
-	loggedCommand := formatCommandForLog(steps)
 	stages := make([]*exec.Stage, 0, len(steps))
-	requestedUsers := make([]string, 0, len(steps))
 	for i, step := range steps {
 		if len(step.Argv) == 0 {
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty argv", i)}
 		}
-		path := step.Argv[0]
-		argv := step.Argv[1:]
+		origPath, origArgv := step.Argv[0], step.Argv[1:]
+		asUser := normalizeUser(step.As, s.currentUser)
 
-		// Make sure command is allowed
-		requestedUser := normalizeUser(step.As, s.currentUser)
-		requestedUsers = append(requestedUsers, requestedUser)
-		rule, ok := s.matcher.Match(path, argv)
-		if !ok {
-			s.log.Denied(loggedCommand, requestedUser)
-			return nil, deny("command not allowed: " + util.JoinForLog(path, argv))
+		// Build the literal exec form (sudo-wrapped if elevation is
+		// needed) before validation so a denial log shows what we would
+		// have run, not the un-wrapped original. The matcher still runs
+		// against the original below - rules describe the user's intent,
+		// not the sudo plumbing.
+		execPath, execArgv := origPath, origArgv
+		if asUser != s.currentUser {
+			execPath, execArgv = s.buildSudoCommand(asUser, origPath, origArgv)
 		}
-
-		// Make sure the requested user is allowed to run the command
-		if err := auth.Check(requestedUser, auth.Resolve(rule.As, s.currentUser)); err != nil {
-			s.log.Denied(loggedCommand, requestedUser)
-			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(path, argv), requestedUser))
-		}
-
-		// Maybe re-write command as: /usr/bin/sudo rrsh sudo <path> <argv>
-		if requestedUser != s.currentUser {
-			path, argv = s.buildSudoCommand(requestedUser, path, argv)
-		}
-
 		var stdin io.Reader
 		if i == 0 && stdinStr != "" {
 			stdin = strings.NewReader(stdinStr)
 		}
 		stages = append(stages, &exec.Stage{
-			Path:  path,
-			Argv:  argv,
-			Rule:  rule,
+			Path:  execPath,
+			Argv:  execArgv,
 			Stdin: stdin,
 		})
+
+		rule, ok := s.matcher.Match(origPath, origArgv)
+		if !ok {
+			s.log.Denied(formatStagesForLog(stages), s.currentUser)
+			return nil, deny("command not allowed: " + util.JoinForLog(origPath, origArgv))
+		}
+		if err := auth.Check(asUser, auth.Resolve(rule.As, s.currentUser)); err != nil {
+			s.log.Denied(formatStagesForLog(stages), s.currentUser)
+			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(origPath, origArgv), asUser))
+		}
+		stages[i].Rule = rule
 	}
-	// e.g. "root,deploy" for a mixed pipeline, or just s.currentUser
-	// when no stage elevated (formatEvent then collapses to a single
-	// user= field).
-	auditUser := s.currentUser
-	if elevated := dedup(requestedUsers, s.currentUser); len(elevated) > 0 {
-		auditUser = strings.Join(elevated, ",")
-	}
-	s.log.Allowed(loggedCommand, auditUser)
+	s.log.Allowed(formatStagesForLog(stages), s.currentUser)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 

@@ -71,36 +71,13 @@ func normalizeUser(requestedUser, currentUser string) string {
 	return requestedUser
 }
 
-// dedup returns the input with `drop` and any subsequent duplicate
-// entries removed, preserving the order of first appearance.
-func dedup(in []string, drop string) []string {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s == drop {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
-}
-
-// formatCommandForLog formats a pipeline as a single space-joined string for
-// syslog. Stages are joined with " | " for readability.
-func formatCommandForLog(stages []runStep) string {
+// formatStagesForLog formats a pipeline's literal exec form (i.e. with
+// sudo-wrapping baked in) as a single space-joined string for syslog.
+// Stages are joined with " | " for readability.
+func formatStagesForLog(stages []*exec.Stage) string {
 	parts := make([]string, len(stages))
-	for i, st := range stages {
-		path := ""
-		var rest []string
-		if len(st.Argv) > 0 {
-			path = st.Argv[0]
-			rest = st.Argv[1:]
-		}
-		parts[i] = util.JoinForLog(path, rest)
+	for i, s := range stages {
+		parts[i] = util.JoinForLog(s.Path, s.Argv)
 	}
 	return strings.Join(parts, " | ")
 }

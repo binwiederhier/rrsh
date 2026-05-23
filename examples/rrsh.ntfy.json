@@ -140,7 +140,7 @@
     {
       "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)"],
       "as": ["root"],
-      "description": "Same as above, but with --no-pager (better for scripted reads)."
+      "description": "Show the systemd journal for ntfy, nginx, ssh, or sshd with --no-pager (better for scripted reads)."
     },
     {
       "command": ["/usr/bin/journalctl", "--no-pager", "-u", "(ntfy|nginx|ssh|sshd)", "-n", "\\d+"],
@@ -234,6 +234,14 @@
       "command": ["/usr/bin/grep", "-i", ".+", "/var/log/(ntfy[^/]*\\.log(\\.\\d+)?|nginx/[^/]+\\.log(\\.\\d+)?|syslog(\\.\\d+)?|auth\\.log(\\.\\d+)?)"],
       "as": ["root"],
       "description": "Case-insensitive grep against an uncompressed log file: `-i <pattern> <path>`. For .gz use zgrep."
+    },
+    {
+      "command": ["/usr/bin/grep", "-i", ".+"],
+      "description": "Case-insensitive grep, intended as a pipeline stage (filter output from a previous allowlisted command)."
+    },
+    {
+      "command": ["/usr/bin/grep", "-iE", ".+"],
+      "description": "Case-insensitive extended-regex grep, intended as a pipeline stage (filter output from a previous allowlisted command)."
     },
     {
       "command": ["/usr/bin/zgrep", "-i", ".+", "/var/log/(ntfy[^/]*\\.log|nginx/[^/]+\\.log|syslog|auth\\.log)\\.\\d+\\.gz"],

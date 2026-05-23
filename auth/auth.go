@@ -3,6 +3,8 @@ package auth
 import (
 	"errors"
 	"slices"
+
+	"github.com/binwiederhier/rrsh/util"
 )
 
 // SelfUser is the magic token in a rule's "as:" list meaning "the SSH
@@ -24,18 +26,14 @@ func Check(requestedUser string, allowedUsers []string) error {
 }
 
 // Resolve substitutes any SelfUser entries in allowedUsers with the
-// concrete selfUser (the originating SSH identity) and deduplicates
+// concrete selfUser (the originating SSH identity) and deduplicates.
 func Resolve(allowedUsers []string, selfUser string) []string {
-	seen := make(map[string]struct{}, len(allowedUsers))
-	for _, u := range allowedUsers {
+	substituted := make([]string, len(allowedUsers))
+	for i, u := range allowedUsers {
 		if u == SelfUser {
 			u = selfUser
 		}
-		seen[u] = struct{}{}
+		substituted[i] = u
 	}
-	out := make([]string, 0, len(seen))
-	for u := range seen {
-		out = append(out, u)
-	}
-	return out
+	return util.Dedup(substituted)
 }

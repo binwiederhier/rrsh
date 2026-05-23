@@ -253,7 +253,7 @@
         "-iE",
         ".+"
       ],
-      "description": "Same as above but extended regex."
+      "description": "Case-insensitive extended-regex grep, intended as a pipeline stage (filter Prometheus text-format /metrics output)."
     },
     {
       "command": [

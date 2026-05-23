@@ -41,7 +41,7 @@ func testRule(command ...string) config.CommandRule {
 // without invoking real sudo.
 func mustNewServer(t *testing.T, cfg *config.Config, self, in string, out *bytes.Buffer) *Server {
 	t.Helper()
-	srv, err := New(cfg, logger.New("tester"), self, strings.NewReader(in), out)
+	srv, err := New(cfg, logger.New(), self, strings.NewReader(in), out)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}

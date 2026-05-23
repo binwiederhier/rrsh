@@ -8,7 +8,6 @@ import (
 	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
-	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
 	"github.com/binwiederhier/rrsh/util"
 )
@@ -35,16 +34,6 @@ func runSudo(args []string) {
 	}
 	currentUser := u.Username
 
-	// Ensure that we're calling via "sudo"
-	originUser := os.Getenv("SUDO_USER")
-	if originUser == "" {
-		fmt.Fprintln(os.Stderr, "rrsh: sudo: must be invoked via /usr/bin/sudo (SUDO_USER unset)")
-		os.Exit(exitDenied)
-	}
-
-	log := logger.New(currentUser)
-	defer log.Close()
-
 	// Load config
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -59,23 +48,18 @@ func runSudo(args []string) {
 	// Check if the command is allowed
 	rule, ok := matcher.New(cfg.Commands).Match(path, argv)
 	if !ok {
-		log.DeniedFrom(input, currentUser, originUser)
 		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", input)
 		os.Exit(exitDenied)
 	}
 
-	// Authorize: us (currentUser) must be in the rule's `as:` list, with
-	// "self" resolving to the originating SSH user (originUser).
-	if err := auth.Check(currentUser, auth.Resolve(rule.As, originUser)); err != nil {
-		log.DeniedFrom(input, currentUser, originUser)
+	// Authorize the call
+	if err := auth.Check(currentUser, rule.As); err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: %s not permitted to run as %s\n", input, currentUser)
 		os.Exit(exitDenied)
 	}
 
-	log.AllowedFrom(input, currentUser, originUser)
+	// Run it
 	res := exec.Execute(path, argv, rule, os.Stdin)
-	// Forward captured streams to our stdio so the parent's executor
-	// in the unprivileged half sees them on its pipe.
 	os.Stdout.Write(res.Stdout)
 	os.Stderr.Write(res.Stderr)
 	os.Exit(res.ExitCode)
