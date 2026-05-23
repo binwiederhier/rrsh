@@ -26,7 +26,7 @@ func Check(requestedUser string, allowedUsers []string) error {
 	return ErrNotPermitted
 }
 
-// Resolve substitutes SelfUser → selfUser and deduplicates.
+// Resolve substitutes SelfUser -> selfUser and deduplicates.
 func Resolve(allowedUsers []string, selfUser string) []string {
 	substituted := make([]string, len(allowedUsers))
 	for i, u := range allowedUsers {

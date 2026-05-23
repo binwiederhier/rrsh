@@ -2,7 +2,7 @@
 
 A JSON-RPC server that lets an AI agent (Claude, Cursor) run a curated set of commands on a remote host. Installs as a user's login shell so sshd handles auth and transport - no daemon to keep running, no port to firewall, no auth code in rrsh itself. The project has zero runtime dependencies (Go stdlib only).
 
-Useful for letting your AI log into a server and do bounded diagnostic work (`systemctl status`, `journalctl -u …`, `tail /var/log/…`, etc.) without giving it a real shell.
+Useful for letting your AI log into a server and do bounded diagnostic work (`systemctl status`, `journalctl -u ...`, `tail /var/log/...`, etc.) without giving it a real shell.
 
 Here's a super simple example:
 
@@ -102,7 +102,7 @@ Rules:
 - The matcher requires `command[0]` to match the caller-supplied path - the string the AI sent as `argv[0]` in the `run` call (a regex, but most operators write a literal like `"/usr/bin/whoami"`). An additional defense-in-depth check requires that path to start with `/`, so accidentally-permissive regexes can't enable PATH-resolution of relative names.
 - `command[0]` can legitimately be a regex when you want one rule to cover related binaries - e.g. `"/usr/bin/(cat|head)"`.
 - Argv matching is element-for-element. `["foo", "bar"]` (two argv elements) is structurally distinct from `["foo bar"]` (one element with a space) - the matcher counts elements separately, so an operator's regex written for two args can't be silently fooled by a single joined element. This is the structural guarantee that makes regex-on-argv safe against shell-injection-style attacks.
-- Each entry of `command` is wrapped in `^(?:…)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
+- Each entry of `command` is wrapped in `^(?:...)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
 - **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected - typos in the config fail fast rather than silently weakening the policy.
 
@@ -200,7 +200,7 @@ rrsh ALL=(root) NOPASSWD: /usr/bin/rrsh sudo *
 
 The package ships this line commented out so installing the package opens no elevation path. Uncomment it (see [Optional: Run commands as root](#optional-run-commands-as-root) in Install) to enable. To allow other target users (e.g. `deploy`), change `(root)` to `(root,deploy)` and list every user that appears in any rule's `as:` list. The file is a conffile, so upgrades won't clobber your changes.
 
-If the grant is missing or commented out, the spawned sudo fails (typically with "sudo: a password is required" or "user … is not allowed to execute …") and that text surfaces in `result.stderr` with a non-zero `result.exit`.
+If the grant is missing or commented out, the spawned sudo fails (typically with "sudo: a password is required" or "user ... is not allowed to execute ...") and that text surfaces in `result.stderr` with a non-zero `result.exit`.
 
 The privileged half (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the command against the rule's `as` list before executing - it never trusts its caller, does no flag parsing, and takes the originating user from `$SUDO_USER`.
 

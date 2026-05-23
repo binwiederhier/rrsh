@@ -72,7 +72,7 @@ func TestParse_PathOnlyRequiresZeroArgv(t *testing.T) {
 }
 
 // TestParse_AutoAnchorsCommandRegex proves that every command-list entry
-// is wrapped in ^(?:…)$ so unanchored regexes can't match substrings.
+// is wrapped in ^(?:...)$ so unanchored regexes can't match substrings.
 func TestParse_AutoAnchorsCommandRegex(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [

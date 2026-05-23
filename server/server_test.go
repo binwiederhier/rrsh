@@ -13,7 +13,7 @@ import (
 )
 
 // testRule mirrors what config.convertRule produces: every entry is
-// auto-anchored with ^(?:…)$. Defaults `As` to [self]; callers override
+// auto-anchored with ^(?:...)$. Defaults `As` to [self]; callers override
 // after construction when they need elevation.
 func testRule(command ...string) config.CommandRule {
 	patterns := make([]*regexp.Regexp, len(command))
@@ -35,7 +35,7 @@ func testRule(command ...string) config.CommandRule {
 // We override srv.rrsh so elevation tests don't actually re-exec the
 // test binary. By default New stores os.Executable(), which during
 // `go test` is the test binary itself - if the caller has broad
-// sudoers, `sudo -n <testbin> sudo …` would spawn the test recursively
+// sudoers, `sudo -n <testbin> sudo ...` would spawn the test recursively
 // until the test timeout. Pointing rrsh at a nonexistent path makes
 // sudo fail fast (exec ENOENT) so the elevation tests verify the gate
 // without invoking real sudo.

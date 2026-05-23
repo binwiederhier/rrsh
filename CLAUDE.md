@@ -13,9 +13,9 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 
 | Directory | Purpose |
 |-----------|---------|
-| `cmd/` | CLI entry point. `cmd/root.go` dispatches; `cmd/serve.go` is the JSON-RPC server entry (`runServe`); `cmd/sudo.go` is the privileged half (`runSudo`, invoked as `rrsh sudo …`). |
+| `cmd/` | CLI entry point. `cmd/root.go` dispatches; `cmd/serve.go` is the JSON-RPC server entry (`runServe`); `cmd/sudo.go` is the privileged half (`runSudo`, invoked as `rrsh sudo ...`). |
 | `config/` | JSON config parser. Strict - `DisallowUnknownFields` everywhere. |
-| `matcher/` | (path, argv) → rule lookup. Per-element regex (path = command[0], argv[i] = command[i+1]). |
+| `matcher/` | (path, argv) -> rule lookup. Per-element regex (path = command[0], argv[i] = command[i+1]). |
 | `exec/` | Runs single commands or native Go pipelines. `exec/exec.go` holds the `Execer` type and methods; `exec/types.go` holds the package-private consts (`defaultTimeout`, `maxOutputBytes`, `timeoutExitCode`) and exported `Stage`/`Result` types. Captures stdout/stderr via `util.CappedBuffer`. |
 | `server/` | JSON-RPC 2.0 server: NDJSON framing, three-method API (`hello`/`run_command`/`run_pipeline`). `server/types.go` holds wire types + JSON-RPC error codes; `server/server.go` holds the dispatch loop and handlers; `server/util.go` holds pure helpers. |
 | `logger/` | Syslog wrapper for `auth.info`/`auth.warning` ALLOWED/DENIED records. |
@@ -47,7 +47,8 @@ The privileged half (`cmd/sudo.go`) deliberately does NOT import `server/`. That
 
 - All source files end with a newline.
 - Comments explain *why*, not *what*; identifiers carry the *what*.
-- Inside longer functions, use single-line comments (`// Load config`, `// Authorize the call`) to narrate sections. Treat them as visual scanners — keep them short and don't strip them just because the code below is self-explanatory; they help readers map the function's structure at a glance.
+- Inside longer functions, use single-line comments (`// Load config`, `// Authorize the call`) to narrate sections. Treat them as visual scanners -- keep them short and don't strip them just because the code below is self-explanatory; they help readers map the function's structure at a glance.
+- ASCII only in code, comments, and docs. Nothing that isn't on a standard US keyboard: write `--` instead of em/en-dashes, `"` and `'` instead of curly quotes, `->` instead of right-arrow, `...` (three periods) instead of the ellipsis character.
 - The privileged half deliberately depends on as few packages as possible. Shared pure helpers (e.g. `util.JoinForLog` for audit-log formatting) live in `util/` so both `cmd/sudo.go` and `server/` import the same implementation without pulling JSON-RPC code into the root trust boundary.
 - User-identity lookups (`os/user.Current()`) happen at the cmd-layer entry points only - the application fails closed if it cannot determine the current user. Lower-level packages take `username string` as a parameter instead of doing their own lookups.
 - Config schema: `command` is a list of regexes. Element 0 matches the binary path, elements 1..N-1 match argv 1-for-1. Multiple rules can share a `command[0]` to express alternative argv shapes; the matcher tries them in declaration order.

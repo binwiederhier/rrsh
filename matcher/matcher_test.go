@@ -9,7 +9,7 @@ import (
 
 // makeRule is a tiny constructor that mirrors what config.convertRule
 // produces in production: every operator-authored regex is wrapped in
-// ^(?:…)$ so MatchString matches the whole element.
+// ^(?:...)$ so MatchString matches the whole element.
 func makeRule(command ...string) config.CommandRule {
 	compiled := make([]*regexp.Regexp, len(command))
 	for i, p := range command {

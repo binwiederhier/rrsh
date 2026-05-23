@@ -71,8 +71,8 @@ func convertRule(r rawRule) (CommandRule, error) {
 	if len(r.Command) == 0 {
 		return CommandRule{}, fmt.Errorf("`command` is required and must have at least one element (the path regex)")
 	}
-	// Auto-anchor with ^(?:…)$ so MatchString can't silently allow a
-	// substring. Idempotent if the operator already wrote ^…$.
+	// Auto-anchor with ^(?:...)$ so MatchString can't silently allow a
+	// substring. Idempotent if the operator already wrote ^...$.
 	patterns := make([]*regexp.Regexp, len(r.Command))
 	for i, src := range r.Command {
 		re, err := regexp.Compile("^(?:" + src + ")$")
