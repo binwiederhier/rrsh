@@ -47,6 +47,7 @@ The privileged half (`cmd/sudo.go`) deliberately does NOT import `server/`. That
 
 - All source files end with a newline.
 - Comments explain *why*, not *what*; identifiers carry the *what*.
+- Inside longer functions, use single-line comments (`// Load config`, `// Authorize the call`) to narrate sections. Treat them as visual scanners — keep them short and don't strip them just because the code below is self-explanatory; they help readers map the function's structure at a glance.
 - The privileged half deliberately depends on as few packages as possible. Shared pure helpers (e.g. `util.JoinForLog` for audit-log formatting) live in `util/` so both `cmd/sudo.go` and `server/` import the same implementation without pulling JSON-RPC code into the root trust boundary.
 - User-identity lookups (`os/user.Current()`) happen at the cmd-layer entry points only - the application fails closed if it cannot determine the current user. Lower-level packages take `username string` as a parameter instead of doing their own lookups.
 - Config schema: `command` is a list of regexes. Element 0 matches the binary path, elements 1..N-1 match argv 1-for-1. Multiple rules can share a `command[0]` to express alternative argv shapes; the matcher tries them in declaration order.

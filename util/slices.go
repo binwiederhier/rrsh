@@ -1,7 +1,7 @@
 package util
 
-// Dedup returns the input with duplicate entries removed. The output
-// order is unspecified; the input is untouched.
+// Dedup returns the input with duplicates removed. Output order
+// unspecified; input untouched.
 func Dedup[T comparable](in []T) []T {
 	seen := make(map[T]struct{}, len(in))
 	out := make([]T, 0, len(in))

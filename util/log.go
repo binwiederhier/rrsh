@@ -5,12 +5,9 @@ import (
 	"strings"
 )
 
-// EscapeForLog neutralizes bytes that would let an authenticated caller
-// forge fake ALLOWED/DENIED records in syslog or spoof terminal output
-// when an operator views the audit log: record-terminator bytes
-// (newline, CR, NUL) get readable escapes (\n, \r, \0), other C0
-// controls and DEL become \xHH, and tab passes through as-is (harmless
-// in syslog and useful in operator-authored input).
+// EscapeForLog neutralizes bytes that could forge fake syslog records
+// or spoof terminal output: \n/\r/\0 become readable escapes, other
+// C0+DEL become \xHH, tab passes through.
 func EscapeForLog(s string) string {
 	if !strings.ContainsFunc(s, needsLogEscape) {
 		return s
@@ -45,10 +42,8 @@ func needsLogEscape(r rune) bool {
 	return r < 0x20 || r == 0x7F
 }
 
-// JoinForLog formats (path, argv) as a single space-joined string for
-// audit logging, with each element escaped via EscapeForLog so embedded
-// control bytes cannot terminate the log record or smuggle terminal
-// control sequences past an operator reading the log.
+// JoinForLog space-joins (path, argv) with each element run through
+// EscapeForLog, safe to drop into a syslog record.
 func JoinForLog(path string, argv []string) string {
 	if len(argv) == 0 {
 		return EscapeForLog(path)

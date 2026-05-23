@@ -23,7 +23,7 @@ const (
 	maxPipelineStages = 16
 )
 
-// Server holds the dependencies needed to serve JSON-RPC requests.
+// Server serves JSON-RPC requests over stdio.
 type Server struct {
 	cfg         *config.Config
 	matcher     *matcher.Matcher
@@ -34,10 +34,9 @@ type Server struct {
 	out         io.Writer
 }
 
-// New constructs a Server. `self` is the current SSH user (what "self"
-// resolves to in `as:` lists). The path to the running binary is
-// resolved internally via os.Executable() and used to re-exec under
-// sudo when a call needs elevation.
+// New constructs a Server. user is the SSH user (what "$USER" resolves
+// to in `as:` lists). The binary path is taken from os.Executable() for
+// the sudo re-exec.
 func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader, out io.Writer) (*Server, error) {
 	rrsh, err := os.Executable()
 	if err != nil {
@@ -54,9 +53,9 @@ func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader
 	}, nil
 }
 
-// Serve runs the read/dispatch/write loop until stdin closes. Errors at
-// the JSON-RPC envelope level are written back as RPC error responses;
-// only an irrecoverable stdin read error stops the loop.
+// Serve runs the read/dispatch/write loop until stdin closes.
+// Envelope-level errors come back as JSON-RPC error responses; only an
+// irrecoverable stdin read error stops the loop.
 func (s *Server) Serve() error {
 	enc := json.NewEncoder(s.out)
 	for {
@@ -91,19 +90,16 @@ func (s *Server) Serve() error {
 	}
 }
 
-// readLine reads one NDJSON line, capping its length at maxRequestBytes
-// to prevent OOM from an unbounded client. The tooLong return is set
-// when the cap was hit; in that case the caller should reply with a
-// parse error and the remainder of the offending line (up to the next
-// '\n') is consumed and discarded so the next request is read cleanly.
+// readLine reads one NDJSON line, capping at maxRequestBytes. On cap
+// hit, tooLong is set and the rest of the line is drained so the next
+// request reads cleanly.
 func (s *Server) readLine() (line []byte, tooLong bool, err error) {
 	for {
 		fragment, fragErr := s.in.ReadSlice('\n')
-		// ReadSlice returns the buffer's internal slice; copy before
-		// appending so the next read can't clobber what we've kept.
+		// ReadSlice returns the buffer's internal slice; append-copy
+		// before the next read clobbers it.
 		line = append(line, fragment...)
 		if errors.Is(fragErr, bufio.ErrBufferFull) {
-			// Partial read; loop until we hit '\n' or io.EOF.
 			if len(line) > maxRequestBytes {
 				tooLong = true
 				if drainErr := s.discardToNewline(); drainErr != nil && !errors.Is(drainErr, io.EOF) {
@@ -121,9 +117,8 @@ func (s *Server) readLine() (line []byte, tooLong bool, err error) {
 	}
 }
 
-// discardToNewline reads and drops bytes from the buffered reader until
-// a newline (or EOF). Used to resync the framing after rejecting an
-// oversized request line.
+// discardToNewline drops bytes until '\n' or EOF, resyncing the
+// framing after an oversized request was rejected.
 func (s *Server) discardToNewline() error {
 	for {
 		_, err := s.in.ReadSlice('\n')
@@ -137,9 +132,8 @@ func (s *Server) discardToNewline() error {
 	}
 }
 
-// handle parses one request and returns a response (or nil for
-// notifications). All parse-time errors get reported as JSON-RPC error
-// responses with a null ID.
+// handle parses one request and returns a response (nil for
+// notifications). Parse errors come back with a null ID.
 func (s *Server) handle(data []byte) *jsonrpcResponse {
 	var req jsonrpcRequest
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -195,9 +189,8 @@ func (s *Server) handleHello() (any, *jsonrpcError) {
 	}, nil
 }
 
-// handleRunCommand wraps a single argv into a one-stage pipeline and
-// delegates to runPipeline. Top-level `as` and `stdin` map to the
-// stage's `as` and the pipeline's `stdin`.
+// handleRunCommand desugars a single argv into a one-stage pipeline.
+// Top-level `as`/`stdin` map to the stage's `as` / the pipeline's stdin.
 func (s *Server) handleRunCommand(params json.RawMessage) (any, *jsonrpcError) {
 	if len(params) == 0 {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires params"}
@@ -231,13 +224,10 @@ func (s *Server) handleRunPipeline(params json.RawMessage) (any, *jsonrpcError) 
 	return s.runPipeline(p.Pipeline, p.Stdin)
 }
 
-// runPipeline is the single execution path for both run_command (which
-// arrives as a one-stage pipeline) and run_pipeline. A one-stage call
-// logs and behaves identically to a direct argv call - the syslog
-// entry has no " | " separator because there is only one stage. Matcher
-// denials surface as JSON-RPC errors (code errDenied) so the AI client
-// gets a clean signal - the child's own non-zero exit lives in
-// result.exit, not in the RPC error envelope.
+// runPipeline is the shared execution path for run_command (arrives
+// as a one-stage pipeline) and run_pipeline. Matcher/auth denials
+// surface as JSON-RPC errors (errDenied); child non-zero exits live
+// in result.exit, not in the error envelope.
 func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcError) {
 	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
@@ -250,10 +240,9 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 		origPath, origArgv := step.Argv[0], step.Argv[1:]
 		asUser := normalizeUser(step.As, s.currentUser)
 
-		// Build the literal exec form (sudo-wrapped if elevation is
-		// needed) before validation so a denial log shows what we would
-		// have run, not the un-wrapped original. The matcher still runs
-		// against the original below - rules describe the user's intent,
+		// Build the exec form (sudo-wrapped if needed) before validation
+		// so a denial log records what we would have run. The matcher
+		// runs against the original below - rules describe user intent,
 		// not the sudo plumbing.
 		execPath, execArgv := origPath, origArgv
 		if asUser != s.currentUser {
@@ -284,16 +273,14 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
-// buildSudoCommand produces (path, argv) suitable for exec.Execute to
-// spawn /usr/bin/sudo and re-enter rrsh's privileged half.
+// buildSudoCommand returns (path, argv) that spawns /usr/bin/sudo
+// to re-enter rrsh's privileged half:
 //
 //	/usr/bin/sudo --non-interactive [--user=USER] -- /usr/bin/rrsh sudo <path> <argv...>
 //
-// -u is omitted when user == "root" (sudo defaults to root). The `--`
-// separator is defense in depth: s.rrsh comes from os.Executable() and
-// path is matcher-enforced absolute, so neither can be confused with a
-// sudo flag today, but `--` makes that resistance explicit and survives
-// any future regression in those upstream invariants.
+// -u is omitted for root (sudo's default). The `--` is defense-in-depth:
+// s.rrsh and path are both absolute today, but `--` protects against a
+// future regression in either invariant.
 func (s *Server) buildSudoCommand(user, path string, argv []string) (string, []string) {
 	args := []string{"--non-interactive"}
 	if user != "root" {

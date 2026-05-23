@@ -2,8 +2,8 @@ package server
 
 import "encoding/json"
 
-// JSON-RPC 2.0 error codes (subset). errDenied is rrsh's own
-// application code, reserved range -32000..-32099.
+// JSON-RPC 2.0 error codes. errDenied is rrsh's own (reserved
+// app-code range -32000..-32099).
 const (
 	errParse          = -32700
 	errInvalidRequest = -32600
@@ -12,8 +12,8 @@ const (
 	errDenied         = -32000
 )
 
-// request is one JSON-RPC 2.0 request. ID is RawMessage so we echo it
-// back unchanged (numbers, strings, and null are all valid IDs).
+// jsonrpcRequest: ID is RawMessage so we can echo it back unchanged
+// (any of number/string/null are valid IDs).
 type jsonrpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
@@ -21,8 +21,7 @@ type jsonrpcRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// response is one JSON-RPC 2.0 response. Exactly one of Result and
-// Error is set.
+// jsonrpcResponse: exactly one of Result or Error is set.
 type jsonrpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
@@ -35,17 +34,15 @@ type jsonrpcError struct {
 	Message string `json:"message"`
 }
 
-// helloResult is the response body of the `hello` method. Instructions
-// carries host-specific guidance the AI reads on first contact;
-// Commands is the full allowlist (one round-trip self-description).
+// helloResult: host-specific Instructions plus the full Commands
+// allowlist, so the AI gets everything in one round-trip.
 type helloResult struct {
 	Instructions string          `json:"instructions,omitempty"`
 	Commands     []*commandEntry `json:"commands"`
 }
 
-// commandEntry is one element of hello's commands array. Command is
-// the rule's source regex patterns: index 0 matches the binary path,
-// indices 1..N-1 match argv 1-for-1.
+// commandEntry: one hello.commands element. Command[0] matches the
+// binary path; [1..N-1] match argv 1-for-1.
 type commandEntry struct {
 	Command     []string `json:"command"`
 	As          []string `json:"as"`
@@ -60,11 +57,9 @@ type runCommandParams struct {
 	Stdin string   `json:"stdin,omitempty"`
 }
 
-// runPipelineParams is the request body of the `run_pipeline` method.
-// Pipeline is a value slice (not []*runStep) so a JSON `null` element
-// decodes as a zero-value runStep that the per-stage empty-argv check
-// rejects cleanly, rather than as a nil pointer that would panic on
-// the first field access.
+// runPipelineParams: Pipeline is a value slice (not []*runStep) so a
+// JSON `null` element decodes to a zero-value runStep that the
+// empty-argv check rejects, rather than a nil pointer that would panic.
 type runPipelineParams struct {
 	Pipeline []runStep `json:"pipeline"`
 	Stdin    string    `json:"stdin,omitempty"`

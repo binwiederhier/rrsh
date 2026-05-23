@@ -134,12 +134,12 @@ func TestParse_RejectsInvalidUsernameInAs(t *testing.T) {
 func TestParse_AcceptsValidUsernameInAs(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands":[
-		{"command":["/bin/x"],"as":["self","root","deploy","_apt","www-data"]}
+		{"command":["/bin/x"],"as":["$USER","root","deploy","_apt","www-data"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"self", "root", "deploy", "_apt", "www-data"}
+	want := []string{"$USER", "root", "deploy", "_apt", "www-data"}
 	if !equalStrings(cfg.Commands[0].As, want) {
 		t.Errorf("As = %v, want %v", cfg.Commands[0].As, want)
 	}
@@ -208,13 +208,13 @@ func TestParse_AsList(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
 		{"command": ["/bin/systemctl", "restart", ".+"], "as": ["root"]},
-		{"command": ["/usr/bin/whoami"], "as": ["self", "root"]},
-		{"command": ["/bin/deploy.sh"], "as": ["self", "deploy"]}
+		{"command": ["/usr/bin/whoami"], "as": ["$USER", "root"]},
+		{"command": ["/bin/deploy.sh"], "as": ["$USER", "deploy"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := [][]string{{"root"}, {"self", "root"}, {"self", "deploy"}}
+	want := [][]string{{"root"}, {"$USER", "root"}, {"$USER", "deploy"}}
 	for i, w := range want {
 		got := cfg.Commands[i].As
 		if !equalStrings(got, w) {

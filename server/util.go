@@ -39,10 +39,9 @@ func errResponse(id json.RawMessage, code int, msg string) *jsonrpcResponse {
 	}
 }
 
-// sanitizeDescription strips C0 controls + DEL from operator-authored
-// descriptions before hello.commands returns them - keeps stray ESC or
-// BEL from becoming terminal-injection in the AI client's UI. Tab and
-// newline survive so multi-line descriptions still render.
+// sanitizeDescription strips C0+DEL from operator-authored strings so
+// stray ESC/BEL can't become terminal injection in the client. Tab and
+// newline survive so multi-line text still renders.
 func sanitizeDescription(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
@@ -54,8 +53,8 @@ func sanitizeDescription(s string) string {
 	}, s)
 }
 
-// safeUTF8 replaces invalid UTF-8 with U+FFFD so arbitrary command
-// output (binary data, stray escapes) can be marshaled as JSON.
+// safeUTF8 replaces invalid UTF-8 with U+FFFD so arbitrary subprocess
+// output can be marshaled as JSON.
 func safeUTF8(b []byte) string {
 	if utf8.Valid(b) {
 		return string(b)
@@ -63,7 +62,7 @@ func safeUTF8(b []byte) string {
 	return strings.ToValidUTF8(string(b), "\uFFFD")
 }
 
-// normalizeUser resolves "" or "self" to the SSH user
+// normalizeUser resolves "" or "$USER" to the SSH user
 func normalizeUser(requestedUser, currentUser string) string {
 	if requestedUser == "" || requestedUser == auth.SelfUser {
 		return currentUser
@@ -71,9 +70,8 @@ func normalizeUser(requestedUser, currentUser string) string {
 	return requestedUser
 }
 
-// formatStagesForLog formats a pipeline's literal exec form (i.e. with
-// sudo-wrapping baked in) as a single space-joined string for syslog.
-// Stages are joined with " | " for readability.
+// formatStagesForLog renders the pipeline's exec form (sudo-wrapping
+// included) as one syslog string, with " | " between stages.
 func formatStagesForLog(stages []*exec.Stage) string {
 	parts := make([]string, len(stages))
 	for i, s := range stages {

@@ -108,7 +108,7 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    AND the operator's /etc/sudoers.d/rrsh grant to be enabled (shipped
    commented out by default). The AI MUST pass "as":"root" explicitly
    - rrsh does not auto-elevate. Omitting "as" runs the command as the
-   SSH user, which fails if the rule doesn't allow "self":
+   SSH user, which fails if the rule doesn't allow "$USER":
 
   echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
          "argv":["/usr/bin/journalctl","-u","ntfy","-n","100"],
@@ -152,9 +152,8 @@ Constraints:
 `, target)
 }
 
-// sshTargetHint returns user@host for help text. Failures fall back to
-// generic placeholders - we're already exiting with an error and the
-// example only needs to be copy-pasteable.
+// sshTargetHint returns user@host for help text, with placeholder
+// fallbacks if either lookup fails.
 func sshTargetHint() string {
 	username := "<user>"
 	if u, err := user.Current(); err == nil && u.Username != "" {
@@ -167,9 +166,8 @@ func sshTargetHint() string {
 	return username + "@" + host
 }
 
-// isTerminal returns true if f is connected to a terminal (i.e. a
-// character device). Uses the file's stat mode - no CGO, no external
-// dependency. False if Stat fails.
+// isTerminal reports whether f is a character device. False on Stat
+// error. Stat-based check avoids CGO.
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()
 	if err != nil {

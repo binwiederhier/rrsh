@@ -2,30 +2,24 @@ package util
 
 import "bytes"
 
-// CappedBuffer is an io.Writer backed by a bytes.Buffer that silently
-// drops bytes once a fixed limit is reached. Writes always claim to have
-// consumed the entire input (so they don't trip exec.Cmd's short-write
-// detection) but bytes past the limit are not retained. The Truncated
-// method returns true if any write was dropped.
-//
-// Intended for capturing untrusted subprocess output where unbounded
-// growth is a DoS risk and partial capture is preferable to either
-// blocking or returning an error.
+// CappedBuffer is an io.Writer that silently drops bytes past a fixed
+// limit. Write always reports full consumption (so exec.Cmd's
+// short-write detection stays quiet) and sets Truncated. Intended for
+// bounding untrusted subprocess output where DoS protection beats
+// either blocking or erroring.
 type CappedBuffer struct {
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
 }
 
-// NewCappedBuffer returns a CappedBuffer that retains at most limit
-// bytes. A limit of zero or negative effectively makes every write
-// dropped while still reporting full consumption.
+// NewCappedBuffer returns a CappedBuffer keeping at most limit bytes.
+// A non-positive limit drops every write.
 func NewCappedBuffer(limit int) *CappedBuffer {
 	return &CappedBuffer{limit: limit}
 }
 
-// Write implements io.Writer. It always returns len(p), nil - bytes past
-// the cap are dropped and the truncated flag is set.
+// Write always returns len(p), nil; bytes past the cap are dropped.
 func (c *CappedBuffer) Write(p []byte) (int, error) {
 	if c.truncated {
 		return len(p), nil
@@ -44,9 +38,8 @@ func (c *CappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Bytes returns the captured bytes. The slice is valid until the next
-// Write, matching bytes.Buffer semantics.
+// Bytes returns the captured bytes (valid until the next Write).
 func (c *CappedBuffer) Bytes() []byte { return c.buf.Bytes() }
 
-// Truncated reports whether any byte was dropped because the cap was hit.
+// Truncated reports whether any byte was dropped.
 func (c *CappedBuffer) Truncated() bool { return c.truncated }

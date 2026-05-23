@@ -73,7 +73,7 @@ Without the uncommented sudoers grant, the spawned sudo fails and the error surf
     { "command": ["/bin/systemctl", "restart", "ntfy"], "as": ["root"],
       "description": "Restart the ntfy systemd unit." },
 
-    { "command": ["/bin/journalctl", "-fu", "ntfy"], "as": ["self", "root"],
+    { "command": ["/bin/journalctl", "-fu", "ntfy"], "as": ["$USER", "root"],
       "description": "Follow the ntfy unit log." }
   ]
 }
@@ -94,7 +94,7 @@ Fields on each command entry:
 | ------------- | ------------- | -------------------------------------------------------------------------------- |
 | `command`     | required      | List of regexes (length ≥ 1). Element 0 matches the binary path; elements 1..N-1 match argv 1-for-1. A call passes only if path matches command[0] AND argv has exactly `len(command)-1` elements AND every argv[i] matches command[i+1]. Patterns are auto-anchored. |
 | `timeout`     | `"30s"`       | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
-| `as`          | `["self"]`    | Users the command may run as. `self` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
+| `as`          | `["$USER"]`   | Users the command may run as. `$USER` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
 | `description` | empty         | Free-text shown to Claude in `hello.commands[*].description`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
 Rules:
@@ -182,15 +182,15 @@ There is no shell, so the user-typed `|` and `>` characters have no meaning anyw
 
 ## Elevation
 
-When a rule's `as` list contains a user other than `self`, Claude must request that user explicitly by passing `"as": "<user>"` on the `run_command` call (or per-stage in `run_pipeline`):
+When a rule's `as` list contains a user other than `$USER`, Claude must request that user explicitly by passing `"as": "<user>"` on the `run_command` call (or per-stage in `run_pipeline`):
 
 | `run_command` params                               | Resolves to                                                                  |
 | -------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `{argv: [...]}`                                    | run as the SSH user (only valid if the rule's `as` includes `self`)          |
+| `{argv: [...]}`                                    | run as the SSH user (only valid if the rule's `as` includes `$USER`)         |
 | `{argv: [...], as: "root"}`                        | run as `root` (only valid if `root` is in the rule's `as`)                   |
 | `{argv: [...], as: "deploy"}`                      | run as `deploy` (only valid if `deploy` is in the rule's `as`)               |
 
-The AI sees each rule's `as` list in `hello.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `self` is a denial.
+The AI sees each rule's `as` list in `hello.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `$USER` is a denial.
 
 Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo. The gate is **the sudoers grant** at `/etc/sudoers.d/rrsh`:
 

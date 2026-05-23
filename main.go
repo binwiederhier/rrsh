@@ -2,7 +2,7 @@ package main
 
 import "github.com/binwiederhier/rrsh/cmd"
 
-// These variables are set during build time using -ldflags
+// Populated by -ldflags at build time.
 var (
 	version = "dev"
 	commit  = "unknown"

@@ -13,10 +13,9 @@ const (
 	exitGeneric = 1
 )
 
-// versionInfo is populated by Execute from main.go's ldflag-injected vars.
 var versionInfo string
 
-// Execute is the entrypoint called from main.go.
+// Execute is the CLI entrypoint.
 func Execute(version, commit, date string) {
 	versionInfo = fmt.Sprintf("rrsh %s (commit %s, built %s)", version, commit, date)
 

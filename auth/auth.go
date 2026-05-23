@@ -8,16 +8,17 @@ import (
 )
 
 // SelfUser is the magic token in a rule's "as:" list meaning "the SSH
-// user who invoked rrsh"
-const SelfUser = "self"
+// user who invoked rrsh". Spelled "$USER" so it can't collide with a
+// real POSIX username (which can't start with "$").
+const SelfUser = "$USER"
 
 // ErrNotPermitted is returned by Check when the requested target user
 // is not in the rule's allowed list.
 var ErrNotPermitted = errors.New("requested user not permitted by rule's as: list")
 
-// Check returns nil if requestedUser is in allowedUsers, or
-// ErrNotPermitted otherwise. The list must already have been processed
-// through Resolve so it contains no SelfUser sentinel values.
+// Check returns nil if requestedUser is in allowedUsers, else
+// ErrNotPermitted. The list must have been run through Resolve so it
+// contains no SelfUser sentinels.
 func Check(requestedUser string, allowedUsers []string) error {
 	if slices.Contains(allowedUsers, requestedUser) {
 		return nil
@@ -25,8 +26,7 @@ func Check(requestedUser string, allowedUsers []string) error {
 	return ErrNotPermitted
 }
 
-// Resolve substitutes any SelfUser entries in allowedUsers with the
-// concrete selfUser (the originating SSH identity) and deduplicates.
+// Resolve substitutes SelfUser → selfUser and deduplicates.
 func Resolve(allowedUsers []string, selfUser string) []string {
 	substituted := make([]string, len(allowedUsers))
 	for i, u := range allowedUsers {
