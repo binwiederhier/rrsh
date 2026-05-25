@@ -19,29 +19,11 @@ import (
 // Wait returns, so grandchildren can't outlive the parent's deadline.
 const killGracePeriod = 100 * time.Millisecond
 
-// newCmd builds an os/exec.Cmd with rrsh's defense-in-depth defaults:
-// minimal env (sshd-passed LD_PRELOAD etc. can't influence the child),
-// Setpgid (own process group), and Cancel/WaitDelay (deadline kills the
-// whole group, not just the direct child).
-func newCmd(ctx context.Context, path string, argv ...string) *osexec.Cmd {
-	c := osexec.CommandContext(ctx, path, argv...)
-	c.Env = defaultEnv()
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.Cancel = func() error {
-		if c.Process == nil {
-			return os.ErrProcessDone
-		}
-		// Negative pid signals the whole process group.
-		return syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
-	}
-	c.WaitDelay = killGracePeriod
-	return c
-}
+// defaultChildEnv pins a minimal env so sshd's AcceptEnv can't
+// influence allowlisted utilities.
+var defaultChildEnv []string
 
-// defaultEnv pins a minimal env for children. Inheriting rrsh's full
-// env would let an SSH client influence allowlisted utilities via vars
-// sshd's AcceptEnv accepts.
-func defaultEnv() []string {
+func init() {
 	home := os.Getenv("HOME")
 	if home == "" {
 		home = "/"
@@ -50,7 +32,7 @@ func defaultEnv() []string {
 	if user == "" {
 		user = "rrsh"
 	}
-	return []string{
+	defaultChildEnv = []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=" + home,
 		"LANG=C.UTF-8",
@@ -58,75 +40,39 @@ func defaultEnv() []string {
 	}
 }
 
-// Execute runs a single command with optional stdin. command[0] is
-// the binary path; command[1:] is argv. A zero timeout uses
-// defaultTimeout. ExitCode is the child's exit, timeoutExitCode on
-// deadline, or 1 on fork/exec errors (or empty command).
+// Execute runs a single command with optional stdin. Thin wrapper over
+// ExecutePipeline so both shapes share one execution path. A zero
+// timeout uses defaultTimeout. Empty command returns ExitCode 1.
 func Execute(command []string, timeout time.Duration, stdin io.Reader) *Result {
 	if len(command) == 0 {
 		return &Result{ExitCode: 1, Stderr: []byte("rrsh: empty command\n")}
 	}
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	stdout := util.NewCappedBuffer(maxOutputBytes)
-	stderr := util.NewCappedBuffer(maxOutputBytes)
-
-	c := newCmd(ctx, command[0], command[1:]...)
-	c.Stdout = stdout
-	c.Stderr = stderr
-	if stdin != nil {
-		c.Stdin = stdin
-	}
-
-	err := c.Run()
-	return finalize(ctx, &Result{
-		Stdout:    stdout.Bytes(),
-		Stderr:    stderr.Bytes(),
-		Truncated: stdout.Truncated() || stderr.Truncated(),
-	}, err)
-}
-
-// finalize maps ctx state + os/exec error into ExitCode/TimedOut.
-// Shared by Execute and ExecutePipeline.
-func finalize(ctx context.Context, res *Result, err error) *Result {
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		res.ExitCode = timeoutExitCode
-		res.TimedOut = true
-		return res
-	}
-	var exitErr *osexec.ExitError
-	if errors.As(err, &exitErr) {
-		res.ExitCode = exitErr.ExitCode()
-		return res
-	}
-	if err != nil {
-		res.ExitCode = 1
-	}
-	return res
+	return ExecutePipeline([]*Stage{{Command: command, Timeout: timeout, Stdin: stdin}})
 }
 
 // ExecutePipeline runs N stages with stage i's stdout wired to stage
-// i+1's stdin. All stages share one deadline (max of defaultTimeout and
-// any per-stage timeout). Only the last stage's stdout is returned; stderr
-// from every stage is merged. Exit code is the last stage's exit.
+// i+1's stdin. The single pipeline deadline is the max of the explicit
+// per-stage timeouts, or defaultTimeout if every stage's Timeout is 0.
+// An explicit timeout always wins, even if shorter than defaultTimeout
+// (so callers asking for a tight bound get it). Only the last stage's
+// stdout is returned; stderr from every stage is merged. Exit code is
+// the last stage's exit. Callers must ensure each Stage.Command is
+// non-empty.
 func ExecutePipeline(stages []*Stage) *Result {
 	if len(stages) == 0 {
 		return &Result{ExitCode: 1, Stderr: []byte("rrsh: empty pipeline\n")}
-	} else if len(stages) == 1 {
-		s := stages[0]
-		return Execute(s.Command, s.Timeout, s.Stdin)
 	}
 
-	// Update stages with timeout
-	timeout := defaultTimeout
+	// Pipeline deadline = max of explicit per-stage timeouts, or
+	// defaultTimeout when none is explicit.
+	var timeout time.Duration
 	for _, s := range stages {
 		if s.Timeout > timeout {
 			timeout = s.Timeout
 		}
+	}
+	if timeout == 0 {
+		timeout = defaultTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -154,24 +100,25 @@ func ExecutePipeline(stages []*Stage) *Result {
 		cmds[i+1].Stdin = pipe
 	}
 
-	// Get a buffer to the last command's stdout
+	// Capture the last command's stdout
 	finalOut := util.NewCappedBuffer(maxOutputBytes)
 	cmds[len(cmds)-1].Stdout = finalOut
 
-	// Start them all and wait
+	// Start each stage (Wait happens in the loop below)
 	for _, c := range cmds {
 		if err := c.Start(); err != nil {
-			// Reap killed children so os/exec's stdin/stdout copy
-			// goroutines exit - otherwise fds and goroutines leak for
-			// the lifetime of the SSH connection.
+			// Two-pass cleanup: kill everyone first (so no downstream
+			// stage blocks on an upstream pipe), then Wait each (so
+			// os/exec's stdin/stdout copy goroutines exit and fds are
+			// released for the SSH connection's lifetime).
 			for _, started := range cmds {
 				if started.Process != nil {
-					_ = started.Process.Kill()
+					started.Process.Kill()
 				}
 			}
 			for _, started := range cmds {
 				if started.Process != nil {
-					_ = started.Wait()
+					started.Wait()
 				}
 			}
 			return &Result{ExitCode: 1, Stderr: []byte("rrsh: pipeline start failed: " + err.Error() + "\n")}
@@ -184,7 +131,7 @@ func ExecutePipeline(stages []*Stage) *Result {
 		}
 	}
 
-	// Collect errors
+	// Merge stderr from all stages
 	var mergedErr bytes.Buffer
 	truncated := finalOut.Truncated()
 	for _, s := range stderrs {
@@ -198,4 +145,41 @@ func ExecutePipeline(stages []*Stage) *Result {
 		Stderr:    mergedErr.Bytes(),
 		Truncated: truncated,
 	}, lastErr)
+}
+
+// newCmd builds an os/exec.Cmd with rrsh's defense-in-depth defaults:
+// minimal env (sshd-passed LD_PRELOAD etc. can't influence the child),
+// Setpgid (own process group), and Cancel/WaitDelay (deadline kills the
+// whole group, not just the direct child).
+func newCmd(ctx context.Context, path string, argv ...string) *osexec.Cmd {
+	c := osexec.CommandContext(ctx, path, argv...)
+	c.Env = defaultChildEnv
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		if c.Process == nil {
+			return os.ErrProcessDone
+		}
+		// Negative pid signals the whole process group.
+		return syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+	}
+	c.WaitDelay = killGracePeriod
+	return c
+}
+
+// finalize maps ctx state + os/exec error into ExitCode/TimedOut.
+func finalize(ctx context.Context, res *Result, err error) *Result {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		res.ExitCode = timeoutExitCode
+		res.TimedOut = true
+		return res
+	}
+	var exitErr *osexec.ExitError
+	if errors.As(err, &exitErr) {
+		res.ExitCode = exitErr.ExitCode()
+		return res
+	}
+	if err != nil {
+		res.ExitCode = 1
+	}
+	return res
 }
