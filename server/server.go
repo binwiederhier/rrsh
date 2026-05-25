@@ -195,8 +195,8 @@ func (s *Server) handleListCommands() (*listCommandsResult, *jsonrpcError) {
 // Top-level `as`/`stdin` map to the stage's `as` / the pipeline's stdin.
 func (s *Server) handleRunCommand(params json.RawMessage) (*runResult, *jsonrpcError) {
 	var p runCommandParams
-	if e := decodeParams("run_command", params, &p); e != nil {
-		return nil, e
+	if err := decodeParams("run_command", params, &p); err != nil {
+		return nil, err
 	}
 	if len(p.Command) == 0 {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires non-empty command"}
@@ -208,8 +208,8 @@ func (s *Server) handleRunCommand(params json.RawMessage) (*runResult, *jsonrpcE
 // feeds stage 0; each stage's `as` is independent.
 func (s *Server) handleRunPipeline(params json.RawMessage) (*runResult, *jsonrpcError) {
 	var p runPipelineParams
-	if e := decodeParams("run_pipeline", params, &p); e != nil {
-		return nil, e
+	if err := decodeParams("run_pipeline", params, &p); err != nil {
+		return nil, err
 	}
 	if len(p.Pipeline) == 0 {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_pipeline requires non-empty pipeline"}
@@ -230,9 +230,9 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (*runResult, *jso
 		if len(step.Command) == 0 {
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
-		stage, e := s.buildStage(step, i == 0, stdinStr)
-		if e != nil {
-			return nil, e
+		stage, err := s.buildStage(step, i == 0, stdinStr)
+		if err != nil {
+			return nil, err
 		}
 		stages = append(stages, stage)
 	}
