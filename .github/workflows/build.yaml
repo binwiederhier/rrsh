@@ -13,6 +13,10 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.25.x'
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
       - name: Build all the things
         run: make build
       - name: Print build results and checksums

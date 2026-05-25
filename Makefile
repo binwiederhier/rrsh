@@ -25,8 +25,8 @@ help:
 	@echo "  make clean                      - Remove dist/ folder"
 	@echo
 	@echo "Dependencies:"
-	@echo "  make deps                       - Install GoReleaser"
-	@echo "  make update                     - Update Go module dependencies and tools"
+	@echo "  make deps                       - Verify GoReleaser is installed (see https://goreleaser.com/install/)"
+	@echo "  make update                     - Update Go module dependencies"
 	@echo
 	@echo "Releasing:"
 	@echo "  make release                    - Create a release"
@@ -89,12 +89,14 @@ clean:
 	rm -rf dist
 
 deps:
-	which goreleaser >/dev/null || go install github.com/goreleaser/goreleaser/v2@latest
+	@which goreleaser >/dev/null || { \
+		echo "ERROR: goreleaser not installed. See https://goreleaser.com/install/"; \
+		exit 1; \
+	}
 
 update:
 	go get -u ./...
 	go mod tidy
-	go install github.com/goreleaser/goreleaser/v2@latest
 
 install-linux-amd64: remove-binary
 	sudo cp -a dist/rrsh_linux_amd64_linux_amd64_v1/rrsh /usr/bin/rrsh
