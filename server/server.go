@@ -237,18 +237,17 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
 
-		// Validate first. MatchAsUser defaults empty step.As to the
-		// matcher's SSH user.
+		// Match command step
 		rule, ok := s.matcher.MatchAsUser(step.Command, step.As)
 		if !ok {
 			s.log.Denied(util.JoinForLog(step.Command), s.currentUser)
-			return nil, deny("command not allowed: " + util.JoinForLog(step.Command))
+			return nil, deny("command not allowed for user " + s.currentUser + ": " + util.JoinForLog(step.Command))
 		}
 
 		// Build the exec form (sudo-wrapped if elevation is needed).
 		command := step.Command
 		if step.As != "" && step.As != s.currentUser {
-			command = s.buildSudoCommand(step.As, step.Command[0], step.Command[1:])
+			command = s.buildSudoCommand(step.As, step.Command)
 		}
 		var stdin io.Reader
 		if i == 0 && stdinStr != "" {
@@ -267,17 +266,17 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 // buildSudoCommand returns the full command (path + args) that spawns
 // /usr/bin/sudo to re-enter rrsh's privileged half:
 //
-//	/usr/bin/sudo -n [-u USER] -- /usr/bin/rrsh sudo <path> <argv...>
+//	/usr/bin/sudo -n [-u USER] -- /usr/bin/rrsh sudo <command...>
 //
 // -u is omitted for root (sudo's default). The `--` is defense-in-depth:
-// s.rrsh and path are both absolute today, but `--` protects against a
-// future regression in either invariant.
-func (s *Server) buildSudoCommand(user, path string, argv []string) []string {
-	cmd := []string{"/usr/bin/sudo", "-n"}
+// s.rrsh and command[0] are both absolute today, but `--` protects
+// against a future regression in either invariant.
+func (s *Server) buildSudoCommand(user string, command []string) []string {
+	wrapped := []string{"/usr/bin/sudo", "-n"}
 	if user != "root" {
-		cmd = append(cmd, "-u", user)
+		wrapped = append(wrapped, "-u", user)
 	}
-	cmd = append(cmd, "--", s.rrsh, "sudo", path)
-	cmd = append(cmd, argv...)
-	return cmd
+	wrapped = append(wrapped, "--", s.rrsh, "sudo")
+	wrapped = append(wrapped, command...)
+	return wrapped
 }
