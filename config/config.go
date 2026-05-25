@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"syscall"
 	"time"
 )
 
@@ -27,7 +28,8 @@ type CommandRule struct {
 }
 
 // Load reads and parses the config file. Refuses group/world-writable
-// files: a writable allowlist + sudoers grant = root escalation.
+// or non-root-owned files: a writable or rrsh-owned allowlist + sudoers
+// grant = root escalation.
 func Load(path string) (*Config, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -35,6 +37,9 @@ func Load(path string) (*Config, error) {
 	}
 	if mode := info.Mode().Perm(); mode&0o022 != 0 {
 		return nil, fmt.Errorf("refusing to load config %s: file is group/world-writable (mode %04o)", path, mode)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
+		return nil, fmt.Errorf("refusing to load config %s: file must be owned by root (uid=%d)", path, st.Uid)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -67,8 +67,8 @@ Without the uncommented sudoers grant, the spawned sudo fails and the error surf
     { "command": ["/usr/bin/whoami"],
       "description": "Show the effective username." },
 
-    { "command": ["/usr/bin/journalctl", "-u", ".+"],
-      "description": "Show the journal for a systemd unit." },
+    { "command": ["/usr/bin/journalctl", "-u", ".+"], "as": ["root"],
+      "description": "Show the journal for a systemd unit (root needed for service-private journals)." },
 
     { "command": ["/usr/bin/ping", "-c", "\\d+", ".+"], "timeout": "60s",
       "description": "Ping a host a fixed number of times. Allowed up to 60s." },
@@ -180,7 +180,7 @@ There is no shell, so the user-typed `|` and `>` characters have no meaning anyw
 ```
 
 - Stdout and stderr are captured separately. They are returned as UTF-8 strings, with invalid bytes replaced by U+FFFD.
-- Each stream is capped at 10 MB; further bytes are dropped and `truncated: true` is set.
+- Each stream is capped at 10 MiB; further bytes are dropped and `truncated: true` is set.
 - Exit code is the child's exit (or last stage's exit for a pipeline). Timeouts return exit `124` with `timed_out: true`.
 
 ## Elevation
@@ -205,23 +205,23 @@ The package ships this line commented out so installing the package opens no ele
 
 If the grant is missing or commented out, the spawned sudo fails (typically with "sudo: a password is required" or "user ... is not allowed to execute ...") and that text surfaces in `result.stderr` with a non-zero `result.exit`.
 
-The privileged half (`rrsh sudo <path> <argv...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the command against the rule's `as` list before executing - it never trusts its caller, does no flag parsing, and takes the originating user from `$SUDO_USER`.
+The privileged half (`rrsh sudo <command...>`, hidden subcommand) re-reads `/etc/rrsh/rrsh.json` from disk and re-runs the matcher against the post-sudo identity (whatever `user.Current()` returns - typically root) before executing. It never trusts its caller, does no flag parsing, and writes no syslog records of its own - the unprivileged side already logged the decision before invoking sudo.
 
 **Trust boundary:** a parser/match bug in rrsh is a root compromise. Keep `as:` lists minimal, keep regexes tight, leave the sudoers grant commented out until you actually need elevation, and prefer one narrow rule per elevated command over a single permissive rule.
 
 ## Logging
 
-Decisions go to syslog under the `rrsh` tag, facility `auth`:
+Decisions go to syslog under the `rrsh` tag, facility `auth`. Every record is `KIND: user=<SSH-user> cmd=<literal-exec-form>` - the cmd= field shows exactly what was (or would have been) handed to `os/exec`, including the sudo wrapping for elevated calls, so an auditor sees the literal invocation rather than the un-wrapped intent:
 
 ```
 Mar  5 21:22:01 host rrsh[12345]: ALLOWED: user=rrsh cmd=/usr/bin/whoami
 Mar  5 21:22:14 host rrsh[12346]: DENIED: user=rrsh cmd=/bin/sh
-Mar  5 21:22:30 host rrsh[12347]: ALLOWED: user=rrsh as=root cmd=/bin/systemctl restart ntfy
-Mar  5 21:22:45 host rrsh[12348]: DENIED: user=rrsh as=root cmd=/usr/bin/whoami
-Mar  5 21:22:55 host rrsh[12349]: ALLOWED: user=rrsh cmd=/usr/bin/journalctl -u ntfy -n 1000 | /usr/bin/grep ERROR
+Mar  5 21:22:30 host rrsh[12347]: ALLOWED: user=rrsh cmd=/usr/bin/sudo -n -- /usr/bin/rrsh sudo /bin/systemctl restart ntfy
+Mar  5 21:22:45 host rrsh[12348]: DENIED: user=rrsh cmd=/usr/bin/sudo -n -- /usr/bin/rrsh sudo /usr/bin/whoami
+Mar  5 21:22:55 host rrsh[12349]: ALLOWED: user=rrsh cmd=/usr/bin/sudo -n -- /usr/bin/rrsh sudo /usr/bin/journalctl -u ntfy -n 1000 | /usr/bin/grep ERROR
 ```
 
-The `as=` field is present only when the executing user differs from the SSH user. Pipelines are logged as the space-joined stages separated by ` | `. On Debian/Ubuntu these typically end up in `/var/log/auth.log`; on RHEL-likes in `/var/log/secure`.
+Pipelines are logged as the space-joined stages separated by ` | `. Only the unprivileged side writes records; the privileged `rrsh sudo` subcommand stays silent (the decision has already been logged). On Debian/Ubuntu these typically end up in `/var/log/auth.log`; on RHEL-likes in `/var/log/secure`.
 
 ## Build from source
 

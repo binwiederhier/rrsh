@@ -306,10 +306,32 @@ func TestLoad_RejectsGroupWritable(t *testing.T) {
 	}
 }
 
+// TestLoad_RejectsNonRootOwned covers the ownership guard: a config
+// owned by the rrsh user (rather than root) lets that user rewrite
+// the allowlist and escalate via the sudoers grant.
+func TestLoad_RejectsNonRootOwned(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("test creates a non-root-owned tempfile; meaningless when running as root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rrsh.json")
+	if err := os.WriteFile(path, []byte(`{"commands":[]}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "owned by root") {
+		t.Fatalf("Load should reject non-root-owned config, got: %v", err)
+	}
+}
+
 // TestLoad_AcceptsRestrictiveMode verifies the happy path: a 0o600
-// config loads cleanly.
+// root-owned config loads cleanly. Skipped when not running as root,
+// since the test cannot create a root-owned tempfile otherwise.
 func TestLoad_AcceptsRestrictiveMode(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create a root-owned tempfile")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rrsh.json")
 	if err := os.WriteFile(path, []byte(`{"commands":[{"command":["/bin/echo"]}]}`), 0o600); err != nil {

@@ -15,11 +15,11 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 |-----------|---------|
 | `cmd/` | CLI entry point. `cmd/root.go` dispatches; `cmd/serve.go` is the JSON-RPC server entry (`runServe`); `cmd/sudo.go` is the privileged half (`runSudo`, invoked as `rrsh sudo ...`). |
 | `config/` | JSON config parser. Strict - `DisallowUnknownFields` everywhere. |
-| `matcher/` | (path, argv) -> rule lookup. Per-element regex (path = command[0], argv[i] = command[i+1]). |
-| `exec/` | Runs single commands or native Go pipelines. `exec/exec.go` holds the `Execer` type and methods; `exec/types.go` holds the package-private consts (`defaultTimeout`, `maxOutputBytes`, `timeoutExitCode`) and exported `Stage`/`Result` types. Captures stdout/stderr via `util.CappedBuffer`. |
+| `matcher/` | command -> rule lookup. Per-element regex (rule.command[0] matches the binary path; rule.command[i] matches the request's command[i]). Match also authorizes the target user against the rule's `as:` list. |
+| `exec/` | Runs single commands or native Go pipelines via free functions `Execute` and `ExecutePipeline`. `exec/types.go` holds package-private consts (`defaultTimeout`, `maxOutputBytes`, `timeoutExitCode`) and exported `Stage`/`Result` types. Captures stdout/stderr via `util.CappedBuffer`. |
 | `server/` | JSON-RPC 2.0 server: NDJSON framing, three-method API (`list_commands`/`run_command`/`run_pipeline`). `server/types.go` holds wire types + JSON-RPC error codes; `server/server.go` holds the dispatch loop and handlers; `server/util.go` holds pure helpers. |
 | `logger/` | Syslog wrapper for `auth.info`/`auth.warning` ALLOWED/DENIED records. |
-| `util/` | Tiny stdlib-only helpers. Currently just `util/buffer.go` (`CappedBuffer`, used by `exec` for bounded subprocess output). |
+| `util/` | Tiny stdlib-only helpers: `util/buffer.go` (`CappedBuffer` for bounded subprocess output) and `util/log.go` (`EscapeForLog` / `JoinForLog` for audit-log formatting). |
 | `pkg/` | Files that the package installs, mirroring their destination paths. `pkg/etc/rrsh/rrsh.json.example`, `pkg/etc/sudoers.d/rrsh`, `pkg/var/lib/rrsh/.hushlogin`. |
 | `scripts/` | dpkg maintainer scripts (`postinst.sh`, `postrm.sh`). |
 | `dist/` | goreleaser output (not committed). |
@@ -37,7 +37,7 @@ goreleaser release --snapshot --clean --skip=publish  # produce .deb/.rpm in dis
 
 ## Trust boundary
 
-A parser/match bug in rrsh is a root compromise. The privileged half (`cmd/sudo.go`) re-reads `/etc/rrsh/rrsh.json` from disk and re-validates the rule's `as:` list before executing anything; it never trusts its caller.
+A parser/match bug in rrsh is a root compromise. The privileged half (`cmd/sudo.go`) re-reads `/etc/rrsh/rrsh.json` from disk and re-runs the matcher (which checks both the command pattern and the rule's `as:` list) before executing anything; it never trusts its caller.
 
 Elevation is gated by a single operator-controlled knob: the sudoers grant at `/etc/sudoers.d/rrsh` (shipped commented out, so installing the package opens no elevation path until the operator uncomments it). If the grant is missing or commented, the spawned sudo fails and the error surfaces in `result.stderr`.
 

@@ -82,16 +82,16 @@ func Execute(command []string, timeout time.Duration, stdin io.Reader) *Result {
 	}
 
 	err := c.Run()
-	return finalize(&Result{
+	return finalize(ctx, &Result{
 		Stdout:    stdout.Bytes(),
 		Stderr:    stderr.Bytes(),
 		Truncated: stdout.Truncated() || stderr.Truncated(),
-	}, ctx, err)
+	}, err)
 }
 
 // finalize maps ctx state + os/exec error into ExitCode/TimedOut.
 // Shared by Execute and ExecutePipeline.
-func finalize(res *Result, ctx context.Context, err error) *Result {
+func finalize(ctx context.Context, res *Result, err error) *Result {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.ExitCode = timeoutExitCode
 		res.TimedOut = true
@@ -195,9 +195,9 @@ func ExecutePipeline(stages []*Stage) *Result {
 			truncated = true
 		}
 	}
-	return finalize(&Result{
+	return finalize(ctx, &Result{
 		Stdout:    finalOut.Bytes(),
 		Stderr:    mergedErr.Bytes(),
 		Truncated: truncated,
-	}, ctx, lastErr)
+	}, lastErr)
 }
