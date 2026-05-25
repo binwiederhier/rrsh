@@ -89,7 +89,7 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    you've forgotten the allowlist) - it is NOT required before every run,
    just for initial discovery:
 
-  echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T %[1]s
+   $ echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T %[1]s
 
    The result has {instructions, commands}. Read
    "instructions" - it's host-specific guidance. Each entry in
@@ -101,25 +101,21 @@ and truncated. Always send a unique numeric "id" so you can correlate.
 
 2) Run one command as the SSH user (default):
 
-  echo '{"jsonrpc":"2.0","id":2,"method":"run_command",
+   $ echo '{"jsonrpc":"2.0","id":2,"method":"run_command",
          "params":{"command":["/usr/bin/whoami"]}}' | ssh -T %[1]s
 
    Result: {"stdout":"...","stderr":"...","exit":0}
 
-3) Run as root. Requires the matched rule's "as" list to include "root"
-   AND the operator's /etc/sudoers.d/rrsh grant to be enabled (shipped
-   commented out by default). The AI MUST pass "as":"root" explicitly
-   - rrsh does not auto-elevate. Omitting "as" runs the command as the
-   SSH user, which fails if the rule's "as" list excludes the SSH user:
+3) To run a command as root (or another user), pass the "as" parameter, e.g. "as": "root".
 
-  echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
+   $ echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
          "command":["/usr/bin/journalctl","-u","ntfy","-n","100"],
          "as":"root"}}' | ssh -T %[1]s
 
 4) Pipe data INTO a command (no shell involved - this is just a string
    handed to the child's stdin):
 
-  echo '{"jsonrpc":"2.0","id":4,"method":"run_command","params":{
+   $ echo '{"jsonrpc":"2.0","id":4,"method":"run_command","params":{
          "command":["/usr/bin/grep","-i","error"],
          "stdin":"foo\nERROR: bar\nbaz\n"}}' | ssh -T %[1]s
 
@@ -129,14 +125,14 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    authorized. stdout of stage i feeds stdin of stage i+1. Per-stage
    "as" lets an elevated stage feed an unprivileged filter:
 
-  echo '{"jsonrpc":"2.0","id":5,"method":"run_pipeline","params":{"pipeline":[
+   $ echo '{"jsonrpc":"2.0","id":5,"method":"run_pipeline","params":{"pipeline":[
          {"command":["/usr/bin/journalctl","-u","ntfy","-n","1000"],"as":"root"},
          {"command":["/usr/bin/grep","-i","error"]}
        ]}}' | ssh -T %[1]s
 
 6) Batch multiple requests in one SSH session, one JSON object per line:
 
-  printf '%%s\n' \
+   $ printf '%%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' \
     '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/whoami"]}}' \
     '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"command":["/usr/bin/uptime"]}}' \

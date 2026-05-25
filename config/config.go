@@ -15,13 +15,13 @@ import (
 // Config is the parsed allowlist. See README for the JSON schema.
 type Config struct {
 	Instructions string
-	Commands     []CommandRule
+	Commands     []Command
 }
 
-// CommandRule is one allowlist entry. CommandPatterns[0] matches the
+// Command is one allowlist entry. CommandPatterns[0] matches the
 // binary path; [1..N-1] match argv 1-for-1. CommandSource keeps the
 // original regex strings for list_commands' response.
-type CommandRule struct {
+type Command struct {
 	CommandPatterns []*regexp.Regexp
 	CommandSource   []string
 	Timeout         time.Duration
@@ -58,23 +58,23 @@ func Parse(data []byte) (*Config, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	cfg := &Config{
+	conf := &Config{
 		Instructions: raw.Instructions,
-		Commands:     make([]CommandRule, 0, len(raw.Commands)),
+		Commands:     make([]Command, 0, len(raw.Commands)),
 	}
 	for i, r := range raw.Commands {
 		rule, err := convertRule(r)
 		if err != nil {
 			return nil, fmt.Errorf("commands[%d]: %w", i, err)
 		}
-		cfg.Commands = append(cfg.Commands, rule)
+		conf.Commands = append(conf.Commands, rule)
 	}
-	return cfg, nil
+	return conf, nil
 }
 
-func convertRule(r rawRule) (CommandRule, error) {
+func convertRule(r rawCommand) (Command, error) {
 	if len(r.Command) == 0 {
-		return CommandRule{}, fmt.Errorf("`command` is required and must have at least one element (the path regex)")
+		return Command{}, fmt.Errorf("`command` is required and must have at least one element (the path regex)")
 	}
 	// Auto-anchor with ^(?:...)$ so MatchString can't silently allow a
 	// substring. Idempotent if the operator already wrote ^...$.
@@ -82,24 +82,24 @@ func convertRule(r rawRule) (CommandRule, error) {
 	for i, src := range r.Command {
 		re, err := regexp.Compile("^(?:" + src + ")$")
 		if err != nil {
-			return CommandRule{}, fmt.Errorf("invalid `command[%d]` regex %q: %w", i, src, err)
+			return Command{}, fmt.Errorf("invalid `command[%d]` regex %q: %w", i, src, err)
 		}
 		patterns[i] = re
 	}
-	rule := CommandRule{
+	rule := Command{
 		CommandPatterns: patterns,
 		CommandSource:   slices.Clone(r.Command),
 	}
 	if r.Timeout != "" {
 		d, err := time.ParseDuration(r.Timeout)
 		if err != nil {
-			return CommandRule{}, fmt.Errorf("invalid `timeout` for %s: %w", r.Command[0], err)
+			return Command{}, fmt.Errorf("invalid `timeout` for %s: %w", r.Command[0], err)
 		}
 		rule.Timeout = d
 	}
 	as, err := normalizeAs(r.Command[0], r.As)
 	if err != nil {
-		return CommandRule{}, err
+		return Command{}, err
 	}
 	rule.As = as
 	rule.Description = r.Description

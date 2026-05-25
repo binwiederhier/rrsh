@@ -13,21 +13,21 @@ import (
 // target user against the rule's `as:` list. Safe to reuse across
 // calls; rules are not mutated.
 type Matcher struct {
-	rules []config.CommandRule
+	rules []config.Command
 	user  string
 }
 
 // New constructs a Matcher bound to user. The user is the default
 // "as:" target (what `MatchAsUser("")` resolves to) and the implicit
 // authorized identity when a rule's `as:` list is empty.
-func New(rules []config.CommandRule, user string) *Matcher {
+func New(rules []config.Command, user string) *Matcher {
 	return &Matcher{rules: rules, user: user}
 }
 
 // Match returns the first rule whose command pattern matches AND whose
 // `as:` list authorizes the matcher's user. Shorthand for
 // MatchAsUser(command, "").
-func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
+func (m *Matcher) Match(command []string) (*config.Command, bool) {
 	return m.MatchAsUser(command, "")
 }
 
@@ -38,7 +38,7 @@ func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
 //   - rule.As non-empty -> asUser must be in the list (literal match)
 //
 // command[0] is the binary path; command[1:] is argv.
-func (m *Matcher) MatchAsUser(command []string, asUser string) (*config.CommandRule, bool) {
+func (m *Matcher) MatchAsUser(command []string, asUser string) (*config.Command, bool) {
 	if asUser == "" {
 		asUser = m.user
 	}
@@ -59,7 +59,7 @@ func (m *Matcher) MatchAsUser(command []string, asUser string) (*config.CommandR
 
 // authorized: empty rule.As means "matcher's user only"; non-empty
 // means asUser must appear in the list verbatim.
-func (m *Matcher) authorized(rule *config.CommandRule, asUser string) bool {
+func (m *Matcher) authorized(rule *config.Command, asUser string) bool {
 	if len(rule.As) == 0 {
 		return asUser == m.user
 	}
@@ -68,7 +68,7 @@ func (m *Matcher) authorized(rule *config.CommandRule, asUser string) bool {
 
 // patternMatches reports whether command satisfies one rule's regex
 // patterns 1-for-1 (shape only, no `as:` check).
-func patternMatches(command []string, rule *config.CommandRule) bool {
+func patternMatches(command []string, rule *config.Command) bool {
 	if len(command) != len(rule.CommandPatterns) {
 		return false
 	}

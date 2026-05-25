@@ -14,12 +14,12 @@ import (
 // testRule mirrors what config.convertRule produces: every entry is
 // auto-anchored with ^(?:...)$. Empty `As` means "current user only";
 // callers override when they want to test elevation.
-func testRule(command ...string) config.CommandRule {
+func testRule(command ...string) config.Command {
 	patterns := make([]*regexp.Regexp, len(command))
 	for i, p := range command {
 		patterns[i] = regexp.MustCompile("^(?:" + p + ")$")
 	}
-	return config.CommandRule{
+	return config.Command{
 		CommandPatterns: patterns,
 		CommandSource:   append([]string(nil), command...),
 	}
@@ -54,7 +54,7 @@ func mustNewServer(t *testing.T, cfg *config.Config, self, in string, out *bytes
 func testServer(t *testing.T, in string) (*bytes.Buffer, error) {
 	t.Helper()
 	cfg := &config.Config{
-		Commands: []config.CommandRule{
+		Commands: []config.Command{
 			testRule("/bin/echo", ".*"),       // /bin/echo + one argv
 			testRule("/bin/echo"),             // /bin/echo + zero argv
 			testRule("/bin/echo", ".*", ".*"), // /bin/echo + two argv
@@ -111,7 +111,7 @@ func TestServer_ListCommands(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{
 		Instructions: "You are on the ntfy prod box.",
-		Commands:     []config.CommandRule{testRule("/bin/echo")},
+		Commands:     []config.Command{testRule("/bin/echo")},
 	}
 	cfg.Commands[0].Description = "Echo something."
 	out := &bytes.Buffer{}
@@ -393,7 +393,7 @@ func TestServer_Run_ElevationReachesExecutor(t *testing.T) {
 	t.Parallel()
 	echoRoot := testRule("/bin/echo", ".*")
 	echoRoot.As = []string{"root"}
-	cfg := &config.Config{Commands: []config.CommandRule{echoRoot}}
+	cfg := &config.Config{Commands: []config.Command{echoRoot}}
 	out := &bytes.Buffer{}
 	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"command":["/bin/echo","x"],"as":"root"}}` + "\n"
 	srv := mustNewServer(t, cfg, "tester", in, out)
