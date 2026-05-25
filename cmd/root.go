@@ -1,3 +1,6 @@
+// Package cmd is the rrsh CLI entry point. root.go dispatches; serve.go
+// runs the unprivileged JSON-RPC server; sudo.go runs the privileged
+// half re-invoked via /usr/bin/sudo.
 package cmd
 
 import (

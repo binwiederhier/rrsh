@@ -1,3 +1,4 @@
+// Package server implements the rrsh JSON-RPC 2.0 server over stdio.
 package server
 
 import (
@@ -10,9 +11,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/binwiederhier/rrsh/audit"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
-	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/matcher"
 	"github.com/binwiederhier/rrsh/util"
 )
@@ -26,9 +27,9 @@ const (
 type Server struct {
 	cfg         *config.Config
 	matcher     *matcher.Matcher
-	log         *logger.SyslogLogger
+	log         *audit.Logger
 	currentUser string // SSH user this server is running as
-	rrsh        string // path to this binary for elevation re-exec
+	selfPath    string // path to this binary for elevation re-exec
 	in          *bufio.Reader
 	out         io.Writer
 }
@@ -36,17 +37,17 @@ type Server struct {
 // New constructs a Server. user is the SSH user (the default "as:"
 // target when a request doesn't specify one). The binary path is
 // taken from os.Executable() for the sudo re-exec.
-func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader, out io.Writer) (*Server, error) {
-	rrsh, err := os.Executable()
+func New(cfg *config.Config, log *audit.Logger, user string, in io.Reader, out io.Writer) (*Server, error) {
+	selfPath, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve own executable path: %w", err)
 	}
 	return &Server{
 		cfg:         cfg,
-		matcher:     matcher.NewForUser(cfg.Commands, user),
+		matcher:     matcher.New(cfg.Commands, user),
 		log:         log,
 		currentUser: user,
-		rrsh:        rrsh,
+		selfPath:    selfPath,
 		in:          bufio.NewReaderSize(in, maxRequestBytes),
 		out:         out,
 	}, nil
@@ -155,7 +156,9 @@ func (s *Server) handle(data []byte) *jsonrpcResponse {
 	return &jsonrpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result}
 }
 
-// dispatch routes a parsed request to its handler.
+// dispatch routes a parsed request to its handler. The concrete result
+// types are wrapped in `any` here so each handler can keep its own
+// typed return.
 func (s *Server) dispatch(method string, params json.RawMessage) (any, *jsonrpcError) {
 	switch method {
 	case "list_commands":
@@ -169,7 +172,7 @@ func (s *Server) dispatch(method string, params json.RawMessage) (any, *jsonrpcE
 	}
 }
 
-func (s *Server) handleListCommands() (any, *jsonrpcError) {
+func (s *Server) handleListCommands() (*listCommandsResult, *jsonrpcError) {
 	out := make([]*commandEntry, 0, len(s.cfg.Commands))
 	for _, r := range s.cfg.Commands {
 		entry := &commandEntry{
@@ -188,18 +191,14 @@ func (s *Server) handleListCommands() (any, *jsonrpcError) {
 	}, nil
 }
 
-// handleRunCommand desugars a single argv into a one-stage pipeline.
+// handleRunCommand desugars a single command into a one-stage pipeline.
 // Top-level `as`/`stdin` map to the stage's `as` / the pipeline's stdin.
-func (s *Server) handleRunCommand(params json.RawMessage) (any, *jsonrpcError) {
-	if len(params) == 0 {
-		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires params"}
-	}
+func (s *Server) handleRunCommand(params json.RawMessage) (*runResult, *jsonrpcError) {
 	var p runCommandParams
-	dec := json.NewDecoder(bytes.NewReader(params))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&p); err != nil {
-		return nil, &jsonrpcError{Code: errInvalidParams, Message: "invalid run_command params: " + err.Error()}
-	} else if len(p.Command) == 0 {
+	if e := decodeParams("run_command", params, &p); e != nil {
+		return nil, e
+	}
+	if len(p.Command) == 0 {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires non-empty command"}
 	}
 	return s.runPipeline([]runStep{{Command: p.Command, As: p.As}}, p.Stdin)
@@ -207,15 +206,10 @@ func (s *Server) handleRunCommand(params json.RawMessage) (any, *jsonrpcError) {
 
 // handleRunPipeline executes a multi-stage pipeline. `stdin` (if set)
 // feeds stage 0; each stage's `as` is independent.
-func (s *Server) handleRunPipeline(params json.RawMessage) (any, *jsonrpcError) {
-	if len(params) == 0 {
-		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_pipeline requires params"}
-	}
+func (s *Server) handleRunPipeline(params json.RawMessage) (*runResult, *jsonrpcError) {
 	var p runPipelineParams
-	dec := json.NewDecoder(bytes.NewReader(params))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&p); err != nil {
-		return nil, &jsonrpcError{Code: errInvalidParams, Message: "invalid run_pipeline params: " + err.Error()}
+	if e := decodeParams("run_pipeline", params, &p); e != nil {
+		return nil, e
 	}
 	if len(p.Pipeline) == 0 {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_pipeline requires non-empty pipeline"}
@@ -224,10 +218,10 @@ func (s *Server) handleRunPipeline(params json.RawMessage) (any, *jsonrpcError) 
 }
 
 // runPipeline is the shared execution path for run_command (arrives
-// as a one-stage pipeline) and run_pipeline. Matcher/auth denials
-// surface as JSON-RPC errors (errDenied); child non-zero exits live
-// in result.exit, not in the error envelope.
-func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcError) {
+// as a one-stage pipeline) and run_pipeline. Matcher denials surface
+// as JSON-RPC errors (errDenied); child non-zero exits live in
+// result.exit, not in the error envelope.
+func (s *Server) runPipeline(steps []runStep, stdinStr string) (*runResult, *jsonrpcError) {
 	if len(steps) > maxPipelineStages {
 		return nil, deny(fmt.Sprintf("pipeline exceeds %d-stage limit", maxPipelineStages))
 	}
@@ -236,31 +230,38 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 		if len(step.Command) == 0 {
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
-
-		// Match command step
-		rule, ok := s.matcher.MatchAsUser(step.Command, step.As)
-		if !ok {
-			s.log.Denied(util.JoinForLog(step.Command), s.currentUser)
-			return nil, deny("command not allowed for user " + s.currentUser + ": " + util.JoinForLog(step.Command))
+		stage, e := s.buildStage(step, i == 0, stdinStr)
+		if e != nil {
+			return nil, e
 		}
-
-		// Build the exec form (sudo-wrapped if elevation is needed).
-		command := step.Command
-		if step.As != "" && step.As != s.currentUser {
-			command = s.buildSudoCommand(step.As, step.Command)
-		}
-		var stdin io.Reader
-		if i == 0 && stdinStr != "" {
-			stdin = strings.NewReader(stdinStr)
-		}
-		stages = append(stages, &exec.Stage{
-			Command: command,
-			Timeout: rule.Timeout,
-			Stdin:   stdin,
-		})
+		stages = append(stages, stage)
 	}
 	s.log.Allowed(formatStagesForLog(stages), s.currentUser)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
+}
+
+// buildStage validates one step against the matcher and produces the
+// executor Stage. On denial it writes the audit log and returns an
+// errDenied jsonrpcError.
+func (s *Server) buildStage(step runStep, isFirst bool, stdinStr string) (*exec.Stage, *jsonrpcError) {
+	rule, ok := s.matcher.MatchAsUser(step.Command, step.As)
+	if !ok {
+		s.log.Denied(util.JoinForLog(step.Command), s.currentUser)
+		return nil, denyForCommand(s.currentUser, step.Command)
+	}
+	command := step.Command
+	if step.As != "" && step.As != s.currentUser {
+		command = s.buildSudoCommand(step.As, step.Command)
+	}
+	var stdin io.Reader
+	if isFirst && stdinStr != "" {
+		stdin = strings.NewReader(stdinStr)
+	}
+	return &exec.Stage{
+		Command: command,
+		Timeout: rule.Timeout,
+		Stdin:   stdin,
+	}, nil
 }
 
 // buildSudoCommand returns the full command (path + args) that spawns
@@ -269,14 +270,14 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 //	/usr/bin/sudo -n [-u USER] -- /usr/bin/rrsh sudo <command...>
 //
 // -u is omitted for root (sudo's default). The `--` is defense-in-depth:
-// s.rrsh and command[0] are both absolute today, but `--` protects
+// selfPath and command[0] are both absolute today, but `--` protects
 // against a future regression in either invariant.
 func (s *Server) buildSudoCommand(user string, command []string) []string {
 	wrapped := []string{"/usr/bin/sudo", "-n"}
 	if user != "root" {
 		wrapped = append(wrapped, "-u", user)
 	}
-	wrapped = append(wrapped, "--", s.rrsh, "sudo")
+	wrapped = append(wrapped, "--", s.selfPath, "sudo")
 	wrapped = append(wrapped, command...)
 	return wrapped
 }

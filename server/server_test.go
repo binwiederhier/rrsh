@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/binwiederhier/rrsh/audit"
 	"github.com/binwiederhier/rrsh/config"
-	"github.com/binwiederhier/rrsh/logger"
 )
 
 // testRule mirrors what config.convertRule produces: every entry is
@@ -30,7 +30,7 @@ func testRule(command ...string) config.CommandRule {
 // fails - a system-level problem we can't usefully recover from in a
 // test).
 //
-// We override srv.rrsh so elevation tests don't actually re-exec the
+// We override srv.selfPath so elevation tests don't actually re-exec the
 // test binary. By default New stores os.Executable(), which during
 // `go test` is the test binary itself - if the caller has broad
 // sudoers, `sudo -n <testbin> sudo ...` would spawn the test recursively
@@ -39,11 +39,11 @@ func testRule(command ...string) config.CommandRule {
 // without invoking real sudo.
 func mustNewServer(t *testing.T, cfg *config.Config, self, in string, out *bytes.Buffer) *Server {
 	t.Helper()
-	srv, err := New(cfg, logger.New(), self, strings.NewReader(in), out)
+	srv, err := New(cfg, audit.New(), self, strings.NewReader(in), out)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	srv.rrsh = "/nonexistent/rrsh-test-binary"
+	srv.selfPath = "/nonexistent/rrsh-test-binary"
 	return srv
 }
 
@@ -386,7 +386,7 @@ func TestServer_Run_OversizedRequestRejected(t *testing.T) {
 // TestServer_Run_ElevationReachesExecutor verifies that requesting an
 // allowed elevation passes the matcher/authorize gates and reaches the
 // executor. The executor will fail (we can't really invoke sudo in
-// tests; mustNewServer pins srv.rrsh to /nonexistent so sudo errors
+// tests; mustNewServer pins srv.selfPath to /nonexistent so sudo errors
 // out fast), but we should see a normal `result` envelope with a
 // non-zero exit - NOT an errDenied RPC error.
 func TestServer_Run_ElevationReachesExecutor(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/user"
 
+	"github.com/binwiederhier/rrsh/audit"
 	"github.com/binwiederhier/rrsh/config"
-	"github.com/binwiederhier/rrsh/logger"
 	"github.com/binwiederhier/rrsh/server"
 )
 
@@ -16,7 +16,7 @@ import (
 // `-c <cmd>`, positional args, or an interactive TTY all error out
 // pointing the caller to the JSON-RPC protocol.
 func runServe(args []string) {
-	fs := flag.NewFlagSet("rrsh", flag.ContinueOnError)
+	fs := flag.NewFlagSet("rrsh", flag.ExitOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() {
 		printUsage(os.Stderr)
@@ -26,28 +26,29 @@ func runServe(args []string) {
 		showHelp    = fs.Bool("help", false, "")
 		showVersion = fs.Bool("version", false, "")
 	)
-	if err := fs.Parse(args); err != nil {
-		os.Exit(exitGeneric)
-	} else if *showHelp {
+	fs.Parse(args) // ExitOnError handles parse failures
+	if *showHelp {
 		printUsage(os.Stdout)
 		return
-	} else if *showVersion {
+	}
+	if *showVersion {
 		printVersion(os.Stdout)
 		return
-	} else if *commandFlag != "" || fs.NArg() > 0 || isTerminal(os.Stdin) {
+	}
+	if *commandFlag != "" || fs.NArg() > 0 || isTerminal(os.Stdin) {
 		printShellHelp(os.Stderr)
 		os.Exit(exitGeneric)
 	}
 
-	// Figure out user
+	// Resolve the SSH user
 	u, err := user.Current()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
 		os.Exit(exitGeneric)
 	}
 
-	// Start syslog logger
-	log := logger.New()
+	// Start syslog audit logger
+	log := audit.New()
 	defer log.Close()
 
 	// Load config

@@ -22,7 +22,7 @@ func makeRule(command ...string) config.CommandRule {
 
 func testMatcher(t *testing.T) *Matcher {
 	t.Helper()
-	return NewForUser([]config.CommandRule{
+	return New([]config.CommandRule{
 		makeRule("/usr/bin/whoami"),
 		makeRule("/usr/bin/ls", "-la", "/var/log/.*"),
 		makeRule("/usr/bin/ps", "aux"),
@@ -144,7 +144,7 @@ func TestMatch_JoinAmbiguityDefeated(t *testing.T) {
 // command[0] is itself a regex - a rule can match multiple binaries.
 func TestMatch_CommandZeroIsRegex(t *testing.T) {
 	t.Parallel()
-	m := NewForUser([]config.CommandRule{
+	m := New([]config.CommandRule{
 		makeRule("/usr/bin/(cat|head)", "/etc/hostname"),
 	}, "tester")
 	if _, ok := m.Match([]string{"/usr/bin/cat", "/etc/hostname"}); !ok {
@@ -172,7 +172,7 @@ func TestMatch_AuthDeniesWhenUserNotInAsList(t *testing.T) {
 	t.Parallel()
 	rule := makeRule("/usr/bin/whoami")
 	rule.As = []string{"root"} // not "tester"
-	m := NewForUser([]config.CommandRule{rule}, "tester")
+	m := New([]config.CommandRule{rule}, "tester")
 	if _, ok := m.Match([]string{"/usr/bin/whoami"}); ok {
 		t.Error("rule's as=[root] should not authorize tester")
 	}
@@ -183,7 +183,7 @@ func TestMatch_AuthAllowsWhenUserInAsList(t *testing.T) {
 	t.Parallel()
 	rule := makeRule("/usr/bin/whoami")
 	rule.As = []string{"root"}
-	m := NewForUser([]config.CommandRule{rule}, "root")
+	m := New([]config.CommandRule{rule}, "root")
 	if _, ok := m.Match([]string{"/usr/bin/whoami"}); !ok {
 		t.Error("rule's as=[root] should authorize root")
 	}
@@ -196,7 +196,7 @@ func TestMatchAsUser_ElevationPath(t *testing.T) {
 	t.Parallel()
 	rule := makeRule("/usr/bin/whoami")
 	rule.As = []string{"root"}
-	m := NewForUser([]config.CommandRule{rule}, "tester")
+	m := New([]config.CommandRule{rule}, "tester")
 
 	// Bare Match (= MatchAsUser with "") defaults asUser to "tester".
 	if _, ok := m.Match([]string{"/usr/bin/whoami"}); ok {
@@ -217,7 +217,7 @@ func TestMatchAsUser_ElevationPath(t *testing.T) {
 func TestMatchAsUser_EmptyAsMeansCurrentUserOnly(t *testing.T) {
 	t.Parallel()
 	rule := makeRule("/usr/bin/whoami") // empty As
-	m := NewForUser([]config.CommandRule{rule}, "tester")
+	m := New([]config.CommandRule{rule}, "tester")
 
 	if _, ok := m.Match([]string{"/usr/bin/whoami"}); !ok {
 		t.Error("tester should be allowed (empty As = current user only)")

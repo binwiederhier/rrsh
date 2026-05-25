@@ -1,10 +1,11 @@
+// Package exec runs single commands or native Go pipelines, with
+// bounded output, env scrubbing, and process-group lifecycle control.
 package exec
 
 import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	osexec "os/exec"
@@ -134,9 +135,6 @@ func ExecutePipeline(stages []*Stage) *Result {
 	cmds := make([]*osexec.Cmd, len(stages))
 	stderrs := make([]*util.CappedBuffer, len(stages))
 	for i, s := range stages {
-		if len(s.Command) == 0 {
-			return &Result{ExitCode: 1, Stderr: []byte(fmt.Sprintf("rrsh: pipeline stage %d has empty command\n", i))}
-		}
 		cmds[i] = newCmd(ctx, s.Command[0], s.Command[1:]...)
 		stderrs[i] = util.NewCappedBuffer(maxOutputBytes)
 		cmds[i].Stderr = stderrs[i]

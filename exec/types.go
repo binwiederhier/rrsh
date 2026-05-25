@@ -8,7 +8,7 @@ import (
 const (
 	// maxOutputBytes caps captured stdout and stderr per stream. Overflow
 	// is silently dropped and Result.Truncated is set.
-	maxOutputBytes = 10 * 1024 * 1024 // 10 MB
+	maxOutputBytes = 10 * 1024 * 1024 // 10 MiB
 	// timeoutExitCode is returned when the context deadline fires.
 	timeoutExitCode = 124
 	// defaultTimeout applies when the caller passes 0.

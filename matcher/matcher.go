@@ -1,8 +1,8 @@
+// Package matcher resolves a command to its allowlist rule and
+// authorizes a target user against the rule's as: list.
 package matcher
 
 import (
-	"fmt"
-	"os/user"
 	"slices"
 	"strings"
 
@@ -17,20 +17,10 @@ type Matcher struct {
 	user  string
 }
 
-// New constructs a Matcher whose user is the OS process user (via
-// user.Current). Used by the privileged half (cmd/sudo.go) where
-// "current user" is whatever sudo elevated to.
-func New(rules []config.CommandRule) (*Matcher, error) {
-	u, err := user.Current()
-	if err != nil {
-		return nil, fmt.Errorf("matcher: cannot determine current user: %w", err)
-	}
-	return &Matcher{rules: rules, user: u.Username}, nil
-}
-
-// NewForUser constructs a Matcher bound to an explicit user. The
-// JSON-RPC server uses this with the SSH user.
-func NewForUser(rules []config.CommandRule, user string) *Matcher {
+// New constructs a Matcher bound to user. The user is the default
+// "as:" target (what `MatchAsUser("")` resolves to) and the implicit
+// authorized identity when a rule's `as:` list is empty.
+func New(rules []config.CommandRule, user string) *Matcher {
 	return &Matcher{rules: rules, user: user}
 }
 

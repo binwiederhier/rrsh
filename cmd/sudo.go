@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/user"
 
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
@@ -25,6 +26,14 @@ func runSudo(args []string) {
 		os.Exit(exitDenied)
 	}
 
+	// Resolve current user (post-sudo identity: root, or whatever
+	// sudo elevated to)
+	u, err := user.Current()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rrsh: cannot determine current user: %v\n", err)
+		os.Exit(exitGeneric)
+	}
+
 	// Load config
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -32,16 +41,8 @@ func runSudo(args []string) {
 		os.Exit(exitGeneric)
 	}
 
-	// Build the matcher (auto-detects current OS user)
-	m, err := matcher.New(cfg.Commands)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "rrsh: %v\n", err)
-		os.Exit(exitGeneric)
-	}
-
-	// Match + authorize against the matcher's current user (root or
-	// whatever sudo elevated to)
-	rule, ok := m.Match(args)
+	// Match + authorize against the post-sudo identity
+	rule, ok := matcher.New(cfg.Commands, u.Username).Match(args)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", util.JoinForLog(args))
 		os.Exit(exitDenied)

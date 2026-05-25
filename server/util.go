@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
@@ -23,6 +24,26 @@ func toRunResult(res *exec.Result) *runResult {
 // deny builds the application-specific "denied" RPC error.
 func deny(msg string) *jsonrpcError {
 	return &jsonrpcError{Code: errDenied, Message: msg}
+}
+
+// denyForCommand keeps the deny message in sync with the audit log
+// format: same command rendering, same surrounding wording.
+func denyForCommand(user string, command []string) *jsonrpcError {
+	return deny("command not allowed for user " + user + ": " + util.JoinForLog(command))
+}
+
+// decodeParams strictly decodes a JSON-RPC `params` payload into dst.
+// Empty payload and unknown fields both yield errInvalidParams.
+func decodeParams[T any](method string, raw json.RawMessage, dst *T) *jsonrpcError {
+	if len(raw) == 0 {
+		return &jsonrpcError{Code: errInvalidParams, Message: method + " requires params"}
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return &jsonrpcError{Code: errInvalidParams, Message: "invalid " + method + " params: " + err.Error()}
+	}
+	return nil
 }
 
 // errResponse wraps a JSON-RPC error into a full response envelope. A

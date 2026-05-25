@@ -1,4 +1,4 @@
-package logger
+package audit
 
 import (
 	"strings"
@@ -16,9 +16,8 @@ func TestFormatEvent_Basic(t *testing.T) {
 }
 
 // TestFormatEvent_EscapesUser covers the syslog-injection mitigation:
-// an authenticated JSON-RPC client controls the `as:` request field
-// before any validation, so a value like "root\nALLOWED: ..." would
-// otherwise forge a fake audit record on the DENIED path.
+// the user field is escaped so a value like "root\nALLOWED: ..." cannot
+// forge a fake audit record.
 func TestFormatEvent_EscapesUser(t *testing.T) {
 	t.Parallel()
 	got := formatEvent("DENIED", "root\nALLOWED: user=root cmd=/bin/sh", "/bin/x")

@@ -1,3 +1,4 @@
+// Package config parses and validates the rrsh allowlist config.
 package config
 
 import (
@@ -6,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"syscall"
 	"time"
 )
@@ -86,7 +88,7 @@ func convertRule(r rawRule) (CommandRule, error) {
 	}
 	rule := CommandRule{
 		CommandPatterns: patterns,
-		CommandSource:   append([]string(nil), r.Command...),
+		CommandSource:   slices.Clone(r.Command),
 	}
 	if r.Timeout != "" {
 		d, err := time.ParseDuration(r.Timeout)

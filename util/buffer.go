@@ -1,3 +1,5 @@
+// Package util holds small stdlib-only helpers shared across rrsh's
+// trust boundary (server, exec, audit, cmd).
 package util
 
 import "bytes"
