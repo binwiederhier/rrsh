@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/binwiederhier/rrsh/auth"
 )
 
 func TestParse_Valid(t *testing.T) {
@@ -134,12 +132,12 @@ func TestParse_RejectsInvalidUsernameInAs(t *testing.T) {
 func TestParse_AcceptsValidUsernameInAs(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands":[
-		{"command":["/bin/x"],"as":["$USER","root","deploy","_apt","www-data"]}
+		{"command":["/bin/x"],"as":["root","deploy","_apt","www-data"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"$USER", "root", "deploy", "_apt", "www-data"}
+	want := []string{"root", "deploy", "_apt", "www-data"}
 	if !equalStrings(cfg.Commands[0].As, want) {
 		t.Errorf("As = %v, want %v", cfg.Commands[0].As, want)
 	}
@@ -188,7 +186,9 @@ func TestParse_RejectsSudoField(t *testing.T) {
 	}
 }
 
-func TestParse_AsDefaults(t *testing.T) {
+// Empty/absent `as:` stays empty - the matcher interprets it as
+// "current user only".
+func TestParse_AsDefaultsToEmpty(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
 		{"command": ["/usr/bin/whoami"]},
@@ -198,8 +198,8 @@ func TestParse_AsDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for i, r := range cfg.Commands {
-		if len(r.As) != 1 || r.As[0] != auth.SelfUser {
-			t.Errorf("command[%d].As = %v, want [self]", i, r.As)
+		if len(r.As) != 0 {
+			t.Errorf("command[%d].As = %v, want empty", i, r.As)
 		}
 	}
 }
@@ -208,13 +208,13 @@ func TestParse_AsList(t *testing.T) {
 	t.Parallel()
 	cfg, err := Parse([]byte(`{"commands": [
 		{"command": ["/bin/systemctl", "restart", ".+"], "as": ["root"]},
-		{"command": ["/usr/bin/whoami"], "as": ["$USER", "root"]},
-		{"command": ["/bin/deploy.sh"], "as": ["$USER", "deploy"]}
+		{"command": ["/usr/bin/whoami"], "as": ["rrsh", "root"]},
+		{"command": ["/bin/deploy.sh"], "as": ["rrsh", "deploy"]}
 	]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := [][]string{{"root"}, {"$USER", "root"}, {"$USER", "deploy"}}
+	want := [][]string{{"root"}, {"rrsh", "root"}, {"rrsh", "deploy"}}
 	for i, w := range want {
 		got := cfg.Commands[i].As
 		if !equalStrings(got, w) {

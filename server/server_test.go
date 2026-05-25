@@ -7,14 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/logger"
 )
 
 // testRule mirrors what config.convertRule produces: every entry is
-// auto-anchored with ^(?:...)$. Defaults `As` to [self]; callers override
-// after construction when they need elevation.
+// auto-anchored with ^(?:...)$. Empty `As` means "current user only";
+// callers override when they want to test elevation.
 func testRule(command ...string) config.CommandRule {
 	patterns := make([]*regexp.Regexp, len(command))
 	for i, p := range command {
@@ -23,7 +22,6 @@ func testRule(command ...string) config.CommandRule {
 	return config.CommandRule{
 		CommandPatterns: patterns,
 		CommandSource:   append([]string(nil), command...),
-		As:              []string{auth.SelfUser},
 	}
 }
 

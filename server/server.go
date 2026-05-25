@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/logger"
@@ -34,9 +33,9 @@ type Server struct {
 	out         io.Writer
 }
 
-// New constructs a Server. user is the SSH user (what "$USER" resolves
-// to in `as:` lists). The binary path is taken from os.Executable() for
-// the sudo re-exec.
+// New constructs a Server. user is the SSH user (the default "as:"
+// target when a request doesn't specify one). The binary path is
+// taken from os.Executable() for the sudo re-exec.
 func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader, out io.Writer) (*Server, error) {
 	rrsh, err := os.Executable()
 	if err != nil {
@@ -238,7 +237,8 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
 
-		// Validate first. MatchAsUser handles the $USER substitution.
+		// Validate first. MatchAsUser defaults empty step.As to the
+		// matcher's SSH user.
 		rule, ok := s.matcher.MatchAsUser(step.Command, step.As)
 		if !ok {
 			s.log.Denied(util.JoinForLog(step.Command), s.currentUser)
@@ -247,7 +247,7 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 
 		// Build the exec form (sudo-wrapped if elevation is needed).
 		command := step.Command
-		if step.As != "" && step.As != auth.SelfUser && step.As != s.currentUser {
+		if step.As != "" && step.As != s.currentUser {
 			command = s.buildSudoCommand(step.As, step.Command[0], step.Command[1:])
 		}
 		var stdin io.Reader

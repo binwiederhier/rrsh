@@ -109,7 +109,7 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    AND the operator's /etc/sudoers.d/rrsh grant to be enabled (shipped
    commented out by default). The AI MUST pass "as":"root" explicitly
    - rrsh does not auto-elevate. Omitting "as" runs the command as the
-   SSH user, which fails if the rule doesn't allow "$USER":
+   SSH user, which fails if the rule's "as" list excludes the SSH user:
 
   echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
          "command":["/usr/bin/journalctl","-u","ntfy","-n","100"],

@@ -76,8 +76,8 @@ Without the uncommented sudoers grant, the spawned sudo fails and the error surf
     { "command": ["/bin/systemctl", "restart", "ntfy"], "as": ["root"],
       "description": "Restart the ntfy systemd unit." },
 
-    { "command": ["/bin/journalctl", "-fu", "ntfy"], "as": ["$USER", "root"],
-      "description": "Follow the ntfy unit log." }
+    { "command": ["/bin/journalctl", "-fu", "ntfy"], "as": ["rrsh", "root"],
+      "description": "Follow the ntfy unit log (rrsh user or root)." }
   ]
 }
 ```
@@ -97,7 +97,7 @@ Fields on each command entry:
 | ------------- | ------------- | -------------------------------------------------------------------------------- |
 | `command`     | required      | List of regexes (length >= 1). Element 0 matches the binary path; elements 1..N-1 match the request's `command` elements 1-for-1. A call passes only if the request's `command` length equals the rule's `command` length AND every request element matches the rule's regex at the same index. Patterns are auto-anchored. |
 | `timeout`     | `"30s"`       | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
-| `as`          | `["$USER"]`   | Users the command may run as. `$USER` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
+| `as`          | empty         | Users the command may run as. Empty means "the SSH user only". A non-empty list is a literal allowlist of target users (e.g. `["root"]` for root-only, `["rrsh", "root"]` for either). Entries must be valid POSIX login names. |
 | `description` | empty         | Free-text shown to Claude in `list_commands.commands[*].description`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
 Rules:
@@ -185,15 +185,15 @@ There is no shell, so the user-typed `|` and `>` characters have no meaning anyw
 
 ## Elevation
 
-When a rule's `as` list contains a user other than `$USER`, Claude must request that user explicitly by passing `"as": "<user>"` on the `run_command` call (or per-stage in `run_pipeline`):
+A request's `"as"` field names the target user to run as. The matched rule's `as:` list must contain that target (or, if `as:` is empty, the target must be the SSH user):
 
 | `run_command` params                               | Resolves to                                                                  |
 | -------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `{command: [...]}`                                    | run as the SSH user (only valid if the rule's `as` includes `$USER`)         |
+| `{command: [...]}`                                 | run as the SSH user (valid if rule's `as` is empty or includes the SSH user) |
 | `{command: [...], as: "root"}`                     | run as `root` (only valid if `root` is in the rule's `as`)                   |
 | `{command: [...], as: "deploy"}`                   | run as `deploy` (only valid if `deploy` is in the rule's `as`)               |
 
-The AI sees each rule's `as` list in `list_commands.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `$USER` is a denial.
+A rule with empty `as:` authorizes only the SSH user. A non-empty `as:` is a literal allowlist of target users (no implicit SSH-user fallback) - if you want a rule that's runnable both un-elevated and as root, list both: `"as": ["rrsh", "root"]`. The AI sees each rule's `as` list in `list_commands.commands[*].as`.
 
 Internally, rrsh re-execs itself via `/usr/bin/sudo` to perform the privilege transition. That's the only invocation of real sudo. The gate is **the sudoers grant** at `/etc/sudoers.d/rrsh`:
 

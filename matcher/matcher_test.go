@@ -4,12 +4,11 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 )
 
 // makeRule mirrors what config.convertRule produces: every operator-authored
-// regex wrapped in ^(?:...)$, As defaulting to [auth.SelfUser].
+// regex wrapped in ^(?:...)$. As is left empty (= matcher's user only).
 func makeRule(command ...string) config.CommandRule {
 	compiled := make([]*regexp.Regexp, len(command))
 	for i, p := range command {
@@ -18,7 +17,6 @@ func makeRule(command ...string) config.CommandRule {
 	return config.CommandRule{
 		CommandPatterns: compiled,
 		CommandSource:   append([]string(nil), command...),
-		As:              []string{auth.SelfUser},
 	}
 }
 
@@ -200,19 +198,31 @@ func TestMatchAsUser_ElevationPath(t *testing.T) {
 	rule.As = []string{"root"}
 	m := NewForUser([]config.CommandRule{rule}, "tester")
 
-	// Bare Match (= MatchAsUser with "") authorizes the SSH user.
+	// Bare Match (= MatchAsUser with "") defaults asUser to "tester".
 	if _, ok := m.Match([]string{"/usr/bin/whoami"}); ok {
 		t.Error("rule's as=[root] should not authorize tester")
 	}
-	// MatchAsUser with explicit "root" target authorizes.
+	// Explicit "root" target is in the rule's As list.
 	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, "root"); !ok {
 		t.Error("MatchAsUser(root) should be allowed by rule's as=[root]")
 	}
-	// $USER and "" resolve to the matcher's user (tester).
-	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, auth.SelfUser); ok {
-		t.Error("MatchAsUser($USER) should resolve to tester and be denied")
-	}
+	// Empty asUser defaults to matcher's user (tester) - denied.
 	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, ""); ok {
-		t.Error("MatchAsUser(\"\") should resolve to tester and be denied")
+		t.Error("MatchAsUser(\"\") should default to tester and be denied")
+	}
+}
+
+// TestMatchAsUser_EmptyAsMeansCurrentUserOnly: a rule with empty As
+// is interpreted as "matcher's user only" - no other user authorized.
+func TestMatchAsUser_EmptyAsMeansCurrentUserOnly(t *testing.T) {
+	t.Parallel()
+	rule := makeRule("/usr/bin/whoami") // empty As
+	m := NewForUser([]config.CommandRule{rule}, "tester")
+
+	if _, ok := m.Match([]string{"/usr/bin/whoami"}); !ok {
+		t.Error("tester should be allowed (empty As = current user only)")
+	}
+	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, "root"); ok {
+		t.Error("root must not match empty-As rule bound to tester")
 	}
 }

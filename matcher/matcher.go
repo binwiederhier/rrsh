@@ -3,14 +3,14 @@ package matcher
 import (
 	"fmt"
 	"os/user"
+	"slices"
 	"strings"
 
-	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 )
 
-// Matcher resolves a command to its allowlist rule and authorizes the
-// matcher's user against the rule's `as:` list. Safe to reuse across
+// Matcher resolves a command to its allowlist rule and authorizes a
+// target user against the rule's `as:` list. Safe to reuse across
 // calls; rules are not mutated.
 type Matcher struct {
 	rules []config.CommandRule
@@ -29,8 +29,7 @@ func New(rules []config.CommandRule) (*Matcher, error) {
 }
 
 // NewForUser constructs a Matcher bound to an explicit user. The
-// JSON-RPC server uses this for un-elevated requests (bound to the
-// SSH user) and for elevated requests (bound to the target user).
+// JSON-RPC server uses this with the SSH user.
 func NewForUser(rules []config.CommandRule, user string) *Matcher {
 	return &Matcher{rules: rules, user: user}
 }
@@ -43,12 +42,14 @@ func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
 }
 
 // MatchAsUser returns the first rule whose command pattern matches AND
-// whose `as:` list authorizes asUser. An empty asUser or auth.SelfUser
-// resolves to the matcher's user; auth.SelfUser entries inside the
-// rule's `as:` list resolve the same way. command[0] is the binary
-// path; command[1:] is argv.
+// whose `as:` list authorizes asUser. An empty asUser defaults to the
+// matcher's user. Authorization rule:
+//   - rule.As empty -> only the matcher's user is allowed
+//   - rule.As non-empty -> asUser must be in the list (literal match)
+//
+// command[0] is the binary path; command[1:] is argv.
 func (m *Matcher) MatchAsUser(command []string, asUser string) (*config.CommandRule, bool) {
-	if asUser == "" || asUser == auth.SelfUser {
+	if asUser == "" {
 		asUser = m.user
 	}
 	// Defense-in-depth: refuse relative paths even if an operator wrote
@@ -66,18 +67,13 @@ func (m *Matcher) MatchAsUser(command []string, asUser string) (*config.CommandR
 	return nil, false
 }
 
-// authorized reports whether asUser is in rule.As, with auth.SelfUser
-// substituted to the matcher's user.
+// authorized: empty rule.As means "matcher's user only"; non-empty
+// means asUser must appear in the list verbatim.
 func (m *Matcher) authorized(rule *config.CommandRule, asUser string) bool {
-	for _, allowed := range rule.As {
-		if allowed == auth.SelfUser {
-			allowed = m.user
-		}
-		if allowed == asUser {
-			return true
-		}
+	if len(rule.As) == 0 {
+		return asUser == m.user
 	}
-	return false
+	return slices.Contains(rule.As, asUser)
 }
 
 // patternMatches reports whether command satisfies one rule's regex

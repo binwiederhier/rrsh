@@ -7,8 +7,6 @@ import (
 	"os"
 	"regexp"
 	"time"
-
-	"github.com/binwiederhier/rrsh/auth"
 )
 
 // Config is the parsed allowlist. See README for the JSON schema.
@@ -24,7 +22,7 @@ type CommandRule struct {
 	CommandPatterns []*regexp.Regexp
 	CommandSource   []string
 	Timeout         time.Duration
-	As              []string // defaults to [auth.SelfUser]
+	As              []string // empty = current user only
 	Description     string
 }
 
@@ -101,11 +99,12 @@ func convertRule(r rawRule) (CommandRule, error) {
 	return rule, nil
 }
 
-// normalizeAs validates `as:` and defaults to ["$USER"]. pathHint is
-// included in error messages so the operator can locate the bad rule.
+// normalizeAs validates `as:`. Empty stays empty (interpreted by the
+// matcher as "current user only"). pathHint is included in error
+// messages so the operator can locate the bad rule.
 func normalizeAs(pathHint string, as []string) ([]string, error) {
 	if len(as) == 0 {
-		return []string{auth.SelfUser}, nil
+		return nil, nil
 	}
 	seen := make(map[string]bool, len(as))
 	out := make([]string, 0, len(as))
@@ -114,7 +113,7 @@ func normalizeAs(pathHint string, as []string) ([]string, error) {
 			return nil, fmt.Errorf("`as` for %s has an empty entry", pathHint)
 		} else if seen[u] {
 			return nil, fmt.Errorf("`as` for %s has duplicate entry %q", pathHint, u)
-		} else if u != auth.SelfUser && !validUsername.MatchString(u) {
+		} else if !validUsername.MatchString(u) {
 			return nil, fmt.Errorf("`as` for %s has invalid username %q (expected POSIX login name)", pathHint, u)
 		}
 		seen[u] = true
