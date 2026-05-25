@@ -44,7 +44,7 @@ func New(cfg *config.Config, log *logger.SyslogLogger, user string, in io.Reader
 	}
 	return &Server{
 		cfg:         cfg,
-		matcher:     matcher.New(cfg.Commands),
+		matcher:     matcher.NewForUser(cfg.Commands, user),
 		log:         log,
 		currentUser: user,
 		rrsh:        rrsh,
@@ -238,7 +238,19 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
 		origPath, origArgv := step.Command[0], step.Command[1:]
-		asUser := normalizeUser(step.As, s.currentUser)
+		asUser := step.As
+		if asUser == "" || asUser == auth.SelfUser {
+			asUser = s.currentUser
+		}
+
+		// Pick a matcher bound to the target user. The self matcher
+		// (built at server construction) covers the common un-elevated
+		// case; elevation needs an ephemeral matcher bound to the
+		// target user since matcher.Match authorizes its bound user.
+		m := s.matcher
+		if asUser != s.currentUser {
+			m = matcher.NewForUser(s.cfg.Commands, asUser)
+		}
 
 		// Build the exec form (sudo-wrapped if needed) before validation
 		// so a denial log records what we would have run. The matcher
@@ -257,14 +269,10 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			Stdin:   stdin,
 		})
 
-		rule, ok := s.matcher.Match(origPath, origArgv)
+		rule, ok := m.Match(step.Command)
 		if !ok {
 			s.log.Denied(formatStagesForLog(stages), s.currentUser)
-			return nil, deny("command not allowed: " + util.JoinForLog(origPath, origArgv))
-		}
-		if err := auth.Check(asUser, auth.Resolve(rule.As, s.currentUser)); err != nil {
-			s.log.Denied(formatStagesForLog(stages), s.currentUser)
-			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(origPath, origArgv), asUser))
+			return nil, deny(fmt.Sprintf("command not allowed for %s: %s", asUser, util.JoinForLog(origPath, origArgv)))
 		}
 		stages[i].Timeout = rule.Timeout
 	}

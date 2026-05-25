@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/exec"
 	"github.com/binwiederhier/rrsh/util"
 )
@@ -60,14 +59,6 @@ func safeUTF8(b []byte) string {
 		return string(b)
 	}
 	return strings.ToValidUTF8(string(b), "\uFFFD")
-}
-
-// normalizeUser resolves "" or "$USER" to the SSH user
-func normalizeUser(requestedUser, currentUser string) string {
-	if requestedUser == "" || requestedUser == auth.SelfUser {
-		return currentUser
-	}
-	return requestedUser
 }
 
 // formatStagesForLog renders the pipeline's exec form (sudo-wrapping

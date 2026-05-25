@@ -4,12 +4,12 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 )
 
-// makeRule is a tiny constructor that mirrors what config.convertRule
-// produces in production: every operator-authored regex is wrapped in
-// ^(?:...)$ so MatchString matches the whole element.
+// makeRule mirrors what config.convertRule produces: every operator-authored
+// regex wrapped in ^(?:...)$, As defaulting to [auth.SelfUser].
 func makeRule(command ...string) config.CommandRule {
 	compiled := make([]*regexp.Regexp, len(command))
 	for i, p := range command {
@@ -18,12 +18,13 @@ func makeRule(command ...string) config.CommandRule {
 	return config.CommandRule{
 		CommandPatterns: compiled,
 		CommandSource:   append([]string(nil), command...),
+		As:              []string{auth.SelfUser},
 	}
 }
 
 func testMatcher(t *testing.T) *Matcher {
 	t.Helper()
-	return New([]config.CommandRule{
+	return NewForUser([]config.CommandRule{
 		makeRule("/usr/bin/whoami"),
 		makeRule("/usr/bin/ls", "-la", "/var/log/.*"),
 		makeRule("/usr/bin/ps", "aux"),
@@ -31,12 +32,12 @@ func testMatcher(t *testing.T) *Matcher {
 		makeRule("/usr/bin/df", ".*"), // any single argv element
 		makeRule("/usr/bin/df"),       // also zero args
 		makeRule("/usr/bin/grep", ".*"),
-	})
+	}, "tester")
 }
 
 func TestMatch_AllowedNoArgs(t *testing.T) {
 	t.Parallel()
-	_, ok := testMatcher(t).Match("/usr/bin/whoami", nil)
+	_, ok := testMatcher(t).Match([]string{"/usr/bin/whoami"})
 	if !ok {
 		t.Error("whoami should be allowed")
 	}
@@ -44,7 +45,7 @@ func TestMatch_AllowedNoArgs(t *testing.T) {
 
 func TestMatch_AllowedWithArgs(t *testing.T) {
 	t.Parallel()
-	_, ok := testMatcher(t).Match("/usr/bin/ls", []string{"-la", "/var/log/syslog"})
+	_, ok := testMatcher(t).Match([]string{"/usr/bin/ls", "-la", "/var/log/syslog"})
 	if !ok {
 		t.Error("ls -la /var/log/syslog should be allowed")
 	}
@@ -52,8 +53,7 @@ func TestMatch_AllowedWithArgs(t *testing.T) {
 
 func TestMatch_AllowedNoArgsVariant(t *testing.T) {
 	t.Parallel()
-	// df with no argv matches the "zero-args" rule.
-	_, ok := testMatcher(t).Match("/usr/bin/df", nil)
+	_, ok := testMatcher(t).Match([]string{"/usr/bin/df"})
 	if !ok {
 		t.Error("df with no args should be allowed (zero-args rule)")
 	}
@@ -61,8 +61,7 @@ func TestMatch_AllowedNoArgsVariant(t *testing.T) {
 
 func TestMatch_AllowedSingleArg(t *testing.T) {
 	t.Parallel()
-	// df -h matches the ".*" single-arg rule.
-	_, ok := testMatcher(t).Match("/usr/bin/df", []string{"-h"})
+	_, ok := testMatcher(t).Match([]string{"/usr/bin/df", "-h"})
 	if !ok {
 		t.Error("df -h should be allowed (one-arg variant)")
 	}
@@ -70,7 +69,7 @@ func TestMatch_AllowedSingleArg(t *testing.T) {
 
 func TestMatch_DeniedWrongArgs(t *testing.T) {
 	t.Parallel()
-	_, ok := testMatcher(t).Match("/usr/bin/ls", []string{"-la", "/etc/passwd"})
+	_, ok := testMatcher(t).Match([]string{"/usr/bin/ls", "-la", "/etc/passwd"})
 	if ok {
 		t.Error("ls -la /etc/passwd should be denied")
 	}
@@ -78,7 +77,7 @@ func TestMatch_DeniedWrongArgs(t *testing.T) {
 
 func TestMatch_DeniedUnknownCommand(t *testing.T) {
 	t.Parallel()
-	_, ok := testMatcher(t).Match("/usr/bin/rm", []string{"-rf", "/"})
+	_, ok := testMatcher(t).Match([]string{"/usr/bin/rm", "-rf", "/"})
 	if ok {
 		t.Error("rm should be denied")
 	}
@@ -86,7 +85,7 @@ func TestMatch_DeniedUnknownCommand(t *testing.T) {
 
 func TestMatch_DeniedRelativePath(t *testing.T) {
 	t.Parallel()
-	_, ok := testMatcher(t).Match("whoami", nil)
+	_, ok := testMatcher(t).Match([]string{"whoami"})
 	if ok {
 		t.Error("relative path should be denied")
 	}
@@ -96,10 +95,7 @@ func TestMatch_DeniedRelativePath(t *testing.T) {
 func TestMatch_MetacharsInArgvElementAreLiteralBytes(t *testing.T) {
 	t.Parallel()
 	m := testMatcher(t)
-
-	// /usr/bin/grep accepts any single argv (rule has ".*"), including
-	// one containing pipe/redirect characters.
-	if _, ok := m.Match("/usr/bin/grep", []string{" | > /dev/null"}); !ok {
+	if _, ok := m.Match([]string{"/usr/bin/grep", " | > /dev/null"}); !ok {
 		t.Error("grep with quoted metachar arg should be allowed by `.*` element regex")
 	}
 }
@@ -109,13 +105,13 @@ func TestMatch_MultipleRulesSamePath(t *testing.T) {
 	t.Parallel()
 	m := testMatcher(t)
 
-	if _, ok := m.Match("/usr/bin/ps", []string{"aux"}); !ok {
+	if _, ok := m.Match([]string{"/usr/bin/ps", "aux"}); !ok {
 		t.Error("ps aux should match the first ps rule")
 	}
-	if _, ok := m.Match("/usr/bin/ps", []string{"-ef"}); !ok {
+	if _, ok := m.Match([]string{"/usr/bin/ps", "-ef"}); !ok {
 		t.Error("ps -ef should match the second ps rule (matcher must try both)")
 	}
-	if _, ok := m.Match("/usr/bin/ps", []string{"-aux", "--sort"}); ok {
+	if _, ok := m.Match([]string{"/usr/bin/ps", "-aux", "--sort"}); ok {
 		t.Error("ps -aux --sort matches neither rule, should be denied")
 	}
 }
@@ -125,11 +121,10 @@ func TestMatch_ArgvLengthMustMatch(t *testing.T) {
 	t.Parallel()
 	m := testMatcher(t)
 
-	// Rule for /usr/bin/ls expects exactly 2 argv elements.
-	if _, ok := m.Match("/usr/bin/ls", []string{"-la"}); ok {
+	if _, ok := m.Match([]string{"/usr/bin/ls", "-la"}); ok {
 		t.Error("ls with 1 arg should be denied (rule expects 2)")
 	}
-	if _, ok := m.Match("/usr/bin/ls", []string{"-la", "/var/log/syslog", "extra"}); ok {
+	if _, ok := m.Match([]string{"/usr/bin/ls", "-la", "/var/log/syslog", "extra"}); ok {
 		t.Error("ls with 3 args should be denied (rule expects 2)")
 	}
 }
@@ -140,15 +135,10 @@ func TestMatch_JoinAmbiguityDefeated(t *testing.T) {
 	t.Parallel()
 	m := testMatcher(t)
 
-	// Rule expects 2 argv elements: ["-la", "/var/log/.*"]. A single
-	// element "-la /var/log/syslog" must NOT match.
-	if _, ok := m.Match("/usr/bin/ls", []string{"-la /var/log/syslog"}); ok {
+	if _, ok := m.Match([]string{"/usr/bin/ls", "-la /var/log/syslog"}); ok {
 		t.Error("single argv element joined-with-space must not satisfy a two-element pattern")
 	}
-
-	// Rule expects single element "aux". Two elements ["a", "ux"] must
-	// not satisfy it.
-	if _, ok := m.Match("/usr/bin/ps", []string{"a", "ux"}); ok {
+	if _, ok := m.Match([]string{"/usr/bin/ps", "a", "ux"}); ok {
 		t.Error("two-element argv must not satisfy a one-element pattern")
 	}
 }
@@ -156,23 +146,47 @@ func TestMatch_JoinAmbiguityDefeated(t *testing.T) {
 // command[0] is itself a regex - a rule can match multiple binaries.
 func TestMatch_CommandZeroIsRegex(t *testing.T) {
 	t.Parallel()
-	m := New([]config.CommandRule{
+	m := NewForUser([]config.CommandRule{
 		makeRule("/usr/bin/(cat|head)", "/etc/hostname"),
-	})
-	if _, ok := m.Match("/usr/bin/cat", []string{"/etc/hostname"}); !ok {
+	}, "tester")
+	if _, ok := m.Match([]string{"/usr/bin/cat", "/etc/hostname"}); !ok {
 		t.Error("/usr/bin/cat /etc/hostname should match (regex command[0])")
 	}
-	if _, ok := m.Match("/usr/bin/head", []string{"/etc/hostname"}); !ok {
+	if _, ok := m.Match([]string{"/usr/bin/head", "/etc/hostname"}); !ok {
 		t.Error("/usr/bin/head /etc/hostname should match (regex command[0])")
 	}
-	if _, ok := m.Match("/usr/bin/tail", []string{"/etc/hostname"}); ok {
+	if _, ok := m.Match([]string{"/usr/bin/tail", "/etc/hostname"}); ok {
 		t.Error("/usr/bin/tail must NOT match - outside the alternation")
 	}
 }
 
-func TestMatch_EmptyPath(t *testing.T) {
+func TestMatch_EmptyCommand(t *testing.T) {
 	t.Parallel()
-	if _, ok := testMatcher(t).Match("", nil); ok {
-		t.Error("empty path should not match")
+	if _, ok := testMatcher(t).Match(nil); ok {
+		t.Error("empty command should not match")
+	}
+}
+
+// TestMatch_AuthDeniesWhenUserNotInAsList: a rule's `as:` list excluding
+// the matcher's user causes the rule to be skipped even if the command
+// pattern matches.
+func TestMatch_AuthDeniesWhenUserNotInAsList(t *testing.T) {
+	t.Parallel()
+	rule := makeRule("/usr/bin/whoami")
+	rule.As = []string{"root"} // not "tester"
+	m := NewForUser([]config.CommandRule{rule}, "tester")
+	if _, ok := m.Match([]string{"/usr/bin/whoami"}); ok {
+		t.Error("rule's as=[root] should not authorize tester")
+	}
+}
+
+// TestMatch_AuthAllowsWhenUserInAsList: explicit user in the as: list.
+func TestMatch_AuthAllowsWhenUserInAsList(t *testing.T) {
+	t.Parallel()
+	rule := makeRule("/usr/bin/whoami")
+	rule.As = []string{"root"}
+	m := NewForUser([]config.CommandRule{rule}, "root")
+	if _, ok := m.Match([]string{"/usr/bin/whoami"}); !ok {
+		t.Error("rule's as=[root] should authorize root")
 	}
 }

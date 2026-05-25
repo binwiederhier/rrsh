@@ -1,51 +1,85 @@
 package matcher
 
 import (
+	"fmt"
+	"os/user"
 	"strings"
 
+	"github.com/binwiederhier/rrsh/auth"
 	"github.com/binwiederhier/rrsh/config"
 )
 
-// Matcher checks (path, argv) pairs against a fixed rule set. Safe to
-// reuse across calls; rules are not mutated.
+// Matcher resolves a command to its allowlist rule and authorizes the
+// matcher's user against the rule's `as:` list. Safe to reuse across
+// calls; rules are not mutated.
 type Matcher struct {
 	rules []config.CommandRule
+	user  string
 }
 
-func New(rules []config.CommandRule) *Matcher {
-	return &Matcher{rules: rules}
+// New constructs a Matcher whose user is the OS process user (via
+// user.Current). Used by the privileged half (cmd/sudo.go) where
+// "current user" is whatever sudo elevated to.
+func New(rules []config.CommandRule) (*Matcher, error) {
+	u, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("matcher: cannot determine current user: %w", err)
+	}
+	return &Matcher{rules: rules, user: u.Username}, nil
 }
 
-// Match returns the first rule whose command[0] matches path AND whose
-// argv shape matches. Multiple rules with the same command[0] coexist
-// as alternative argv shapes (e.g. `ps aux` and `ps -ef`); the matcher
-// tries each in declaration order.
-func (m *Matcher) Match(path string, argv []string) (*config.CommandRule, bool) {
+// NewForUser constructs a Matcher bound to an explicit user. The
+// JSON-RPC server uses this for un-elevated requests (bound to the
+// SSH user) and for elevated requests (bound to the target user).
+func NewForUser(rules []config.CommandRule, user string) *Matcher {
+	return &Matcher{rules: rules, user: user}
+}
+
+// Match returns the first rule whose command pattern matches AND whose
+// `as:` list authorizes the matcher's user. auth.SelfUser entries in
+// the rule's `as:` list are resolved against the matcher's user.
+// command[0] is the binary path; command[1:] is argv.
+func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
 	// Defense-in-depth: refuse relative paths even if an operator wrote
 	// an over-permissive command[0] regex, since exec would PATH-resolve.
-	if !strings.HasPrefix(path, "/") {
+	if len(command) == 0 || !strings.HasPrefix(command[0], "/") {
 		return nil, false
 	}
 	for i := range m.rules {
 		rule := &m.rules[i]
-		if matches(path, argv, rule) {
-			return rule, true
+		if !patternMatches(command, rule) {
+			continue
 		}
+		if !m.authorized(rule) {
+			continue
+		}
+		return rule, true
 	}
 	return nil, false
 }
 
-// matches reports whether (path, argv) satisfies one rule.
-func matches(path string, argv []string, rule *config.CommandRule) bool {
-	if len(rule.CommandPatterns) == 0 {
-		return false
-	} else if !rule.CommandPatterns[0].MatchString(path) {
-		return false
-	} else if len(argv) != len(rule.CommandPatterns)-1 {
+// authorized reports whether the matcher's user is in rule.As, with
+// auth.SelfUser substituted to the matcher's user.
+func (m *Matcher) authorized(rule *config.CommandRule) bool {
+	for _, allowed := range rule.As {
+		if allowed == auth.SelfUser {
+			allowed = m.user
+		}
+		if allowed == m.user {
+			return true
+		}
+	}
+	return false
+}
+
+// patternMatches reports whether command satisfies one rule's regex
+// patterns 1-for-1 (shape only, no `as:` check).
+func patternMatches(command []string, rule *config.CommandRule) bool {
+	if len(command) != len(rule.CommandPatterns) {
 		return false
 	}
-	for i, a := range argv {
-		if !rule.CommandPatterns[i+1].MatchString(a) {
+	for i, s := range command {
+		if !rule.CommandPatterns[i].MatchString(s) {
 			return false
 		}
 	}

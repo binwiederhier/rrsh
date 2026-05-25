@@ -1,5 +1,8 @@
 # rrsh - really restricted shell
 
+> [!WARNING]
+> **WORK IN PROGRESS.** rrsh is under active development. The wire format, config schema, and CLI may change without notice. Do not deploy to production yet. No stability guarantees until v1.0.
+
 A JSON-RPC server that lets an AI agent (Claude, Cursor) run a curated set of commands on a remote host. Installs as a user's login shell so sshd handles auth and transport - no daemon to keep running, no port to firewall, no auth code in rrsh itself. The project has zero runtime dependencies (Go stdlib only).
 
 Useful for letting your AI log into a server and do bounded diagnostic work (`systemctl status`, `journalctl -u ...`, `tail /var/log/...`, etc.) without giving it a real shell.
