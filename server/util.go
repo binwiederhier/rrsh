@@ -75,7 +75,11 @@ func normalizeUser(requestedUser, currentUser string) string {
 func formatStagesForLog(stages []*exec.Stage) string {
 	parts := make([]string, len(stages))
 	for i, s := range stages {
-		parts[i] = util.JoinForLog(s.Path, s.Argv)
+		if len(s.Command) == 0 {
+			parts[i] = ""
+			continue
+		}
+		parts[i] = util.JoinForLog(s.Command[0], s.Command[1:])
 	}
 	return strings.Join(parts, " | ")
 }

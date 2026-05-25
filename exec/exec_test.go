@@ -5,14 +5,11 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/binwiederhier/rrsh/config"
 )
 
 func TestExecute_Success(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{}
-	res := Execute("/bin/echo", []string{"hello"}, rule, nil)
+	res := Execute([]string{"/bin/echo", "hello"}, 0, nil)
 	if res.ExitCode != 0 {
 		t.Errorf("exit code = %d, want 0", res.ExitCode)
 	}
@@ -23,22 +20,26 @@ func TestExecute_Success(t *testing.T) {
 
 func TestExecute_ExitCode(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{}
-	res := Execute("/bin/false", nil, rule, nil)
+	res := Execute([]string{"/bin/false"}, 0, nil)
 	if res.ExitCode == 0 {
 		t.Error("expected non-zero exit code from /bin/false")
 	}
 }
 
-// Per-rule timeout still applies; defaultTimeout is irrelevant here
-// because the rule asked for a tighter bound.
-func TestExecute_PerRuleTimeout(t *testing.T) {
+func TestExecute_EmptyCommand(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{
-		Timeout: 100 * time.Millisecond,
+	res := Execute(nil, 0, nil)
+	if res.ExitCode != 1 {
+		t.Errorf("exit code = %d, want 1", res.ExitCode)
 	}
+}
+
+// Per-stage timeout still applies; defaultTimeout is irrelevant here
+// because the caller asked for a tighter bound.
+func TestExecute_PerStageTimeout(t *testing.T) {
+	t.Parallel()
 	start := time.Now()
-	res := Execute("/bin/sleep", []string{"10"}, rule, nil)
+	res := Execute([]string{"/bin/sleep", "10"}, 100*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if res.ExitCode != timeoutExitCode {
@@ -48,7 +49,7 @@ func TestExecute_PerRuleTimeout(t *testing.T) {
 		t.Error("TimedOut should be true")
 	}
 	if elapsed > 2*time.Second {
-		t.Errorf("took %v, per-rule timeout should have kicked in", elapsed)
+		t.Errorf("took %v, per-stage timeout should have kicked in", elapsed)
 	}
 }
 
@@ -58,8 +59,7 @@ func TestExecute_PerRuleTimeout(t *testing.T) {
 // single string with an internal space stays a single arg.
 func TestExecute_ArgWithEmbeddedSpace(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{}
-	res := Execute("/bin/echo", []string{"a b", "c"}, rule, nil)
+	res := Execute([]string{"/bin/echo", "a b", "c"}, 0, nil)
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
 	}
@@ -72,8 +72,7 @@ func TestExecute_ArgWithEmbeddedSpace(t *testing.T) {
 
 func TestExecute_Stdin(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{}
-	res := Execute("/bin/cat", nil, rule, strings.NewReader("hello stdin"))
+	res := Execute([]string{"/bin/cat"}, 0, strings.NewReader("hello stdin"))
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
 	}
@@ -86,8 +85,7 @@ func TestExecute_StderrCaptured(t *testing.T) {
 	t.Parallel()
 	// /bin/sh -c "echo err >&2" would require a shell; instead use a
 	// command that's guaranteed to write to stderr: ls of a missing file.
-	rule := &config.CommandRule{}
-	res := Execute("/bin/ls", []string{"/nonexistent-path-rrsh-test"}, rule, nil)
+	res := Execute([]string{"/bin/ls", "/nonexistent-path-rrsh-test"}, 0, nil)
 	if res.ExitCode == 0 {
 		t.Error("ls of missing path should fail")
 	}
@@ -98,11 +96,9 @@ func TestExecute_StderrCaptured(t *testing.T) {
 
 func TestExecutePipeline_Success(t *testing.T) {
 	t.Parallel()
-	echoRule := &config.CommandRule{}
-	catRule := &config.CommandRule{}
 	res := ExecutePipeline([]*Stage{
-		&Stage{Path: "/bin/echo", Argv: []string{"hello pipeline"}, Rule: echoRule},
-		&Stage{Path: "/bin/cat", Rule: catRule},
+		{Command: []string{"/bin/echo", "hello pipeline"}},
+		{Command: []string{"/bin/cat"}},
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
@@ -115,11 +111,9 @@ func TestExecutePipeline_Success(t *testing.T) {
 func TestExecutePipeline_LastStageExitWins(t *testing.T) {
 	t.Parallel()
 	// Even though the first stage succeeds, the last stage exits non-zero.
-	echoRule := &config.CommandRule{}
-	falseRule := &config.CommandRule{}
 	res := ExecutePipeline([]*Stage{
-		&Stage{Path: "/bin/echo", Argv: []string{"x"}, Rule: echoRule},
-		&Stage{Path: "/bin/false", Rule: falseRule},
+		{Command: []string{"/bin/echo", "x"}},
+		{Command: []string{"/bin/false"}},
 	})
 	if res.ExitCode == 0 {
 		t.Errorf("expected non-zero exit, got %d", res.ExitCode)
@@ -128,10 +122,9 @@ func TestExecutePipeline_LastStageExitWins(t *testing.T) {
 
 func TestExecutePipeline_Stdin(t *testing.T) {
 	t.Parallel()
-	catRule := &config.CommandRule{}
 	res := ExecutePipeline([]*Stage{
-		&Stage{Path: "/bin/cat", Rule: catRule, Stdin: strings.NewReader("piped in\n")},
-		&Stage{Path: "/bin/cat", Rule: catRule},
+		{Command: []string{"/bin/cat"}, Stdin: strings.NewReader("piped in\n")},
+		{Command: []string{"/bin/cat"}},
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d, stderr=%q", res.ExitCode, res.Stderr)
@@ -143,9 +136,8 @@ func TestExecutePipeline_Stdin(t *testing.T) {
 
 func TestExecutePipeline_SingleStageEquivalentToExecute(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{}
 	res := ExecutePipeline([]*Stage{
-		&Stage{Path: "/bin/echo", Argv: []string{"solo"}, Rule: rule},
+		{Command: []string{"/bin/echo", "solo"}},
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
@@ -159,8 +151,7 @@ func TestExecutePipeline_SingleStageEquivalentToExecute(t *testing.T) {
 // surface as Truncated=false.
 func TestExecute_LargeOutputFits(t *testing.T) {
 	t.Parallel()
-	rule := &config.CommandRule{}
-	res := Execute("/usr/bin/head", []string{"-c", "1048576", "/dev/zero"}, rule, nil)
+	res := Execute([]string{"/usr/bin/head", "-c", "1048576", "/dev/zero"}, 0, nil)
 	if res.ExitCode != 0 {
 		t.Fatalf("exit code = %d", res.ExitCode)
 	}

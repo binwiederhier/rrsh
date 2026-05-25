@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	osexec "os/exec"
 	"syscall"
 	"time"
 
-	"github.com/binwiederhier/rrsh/config"
 	"github.com/binwiederhier/rrsh/util"
 )
 
@@ -57,12 +57,16 @@ func defaultEnv() []string {
 	}
 }
 
-// Execute runs a single command with optional stdin. ExitCode is the
-// child's exit, timeoutExitCode on deadline, or 1 on fork/exec errors.
-func Execute(path string, argv []string, rule *config.CommandRule, stdin io.Reader) *Result {
-	timeout := defaultTimeout
-	if rule != nil && rule.Timeout > 0 {
-		timeout = rule.Timeout
+// Execute runs a single command with optional stdin. command[0] is
+// the binary path; command[1:] is argv. A zero timeout uses
+// defaultTimeout. ExitCode is the child's exit, timeoutExitCode on
+// deadline, or 1 on fork/exec errors (or empty command).
+func Execute(command []string, timeout time.Duration, stdin io.Reader) *Result {
+	if len(command) == 0 {
+		return &Result{ExitCode: 1, Stderr: []byte("rrsh: empty command\n")}
+	}
+	if timeout == 0 {
+		timeout = defaultTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -70,7 +74,7 @@ func Execute(path string, argv []string, rule *config.CommandRule, stdin io.Read
 	stdout := util.NewCappedBuffer(maxOutputBytes)
 	stderr := util.NewCappedBuffer(maxOutputBytes)
 
-	c := newCmd(ctx, path, argv...)
+	c := newCmd(ctx, command[0], command[1:]...)
 	c.Stdout = stdout
 	c.Stderr = stderr
 	if stdin != nil {
@@ -106,21 +110,21 @@ func finalize(res *Result, ctx context.Context, err error) *Result {
 
 // ExecutePipeline runs N stages with stage i's stdout wired to stage
 // i+1's stdin. All stages share one deadline (max of defaultTimeout and
-// any per-rule timeout). Only the last stage's stdout is returned; stderr
+// any per-stage timeout). Only the last stage's stdout is returned; stderr
 // from every stage is merged. Exit code is the last stage's exit.
 func ExecutePipeline(stages []*Stage) *Result {
 	if len(stages) == 0 {
 		return &Result{ExitCode: 1, Stderr: []byte("rrsh: empty pipeline\n")}
 	} else if len(stages) == 1 {
 		s := stages[0]
-		return Execute(s.Path, s.Argv, s.Rule, s.Stdin)
+		return Execute(s.Command, s.Timeout, s.Stdin)
 	}
 
 	// Update stages with timeout
 	timeout := defaultTimeout
 	for _, s := range stages {
-		if s.Rule != nil && s.Rule.Timeout > timeout {
-			timeout = s.Rule.Timeout
+		if s.Timeout > timeout {
+			timeout = s.Timeout
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -130,7 +134,10 @@ func ExecutePipeline(stages []*Stage) *Result {
 	cmds := make([]*osexec.Cmd, len(stages))
 	stderrs := make([]*util.CappedBuffer, len(stages))
 	for i, s := range stages {
-		cmds[i] = newCmd(ctx, s.Path, s.Argv...)
+		if len(s.Command) == 0 {
+			return &Result{ExitCode: 1, Stderr: []byte(fmt.Sprintf("rrsh: pipeline stage %d has empty command\n", i))}
+		}
+		cmds[i] = newCmd(ctx, s.Command[0], s.Command[1:]...)
 		stderrs[i] = util.NewCappedBuffer(maxOutputBytes)
 		cmds[i].Stderr = stderrs[i]
 	}

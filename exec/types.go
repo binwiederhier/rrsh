@@ -3,8 +3,6 @@ package exec
 import (
 	"io"
 	"time"
-
-	"github.com/binwiederhier/rrsh/config"
 )
 
 const (
@@ -13,7 +11,7 @@ const (
 	maxOutputBytes = 10 * 1024 * 1024 // 10 MB
 	// timeoutExitCode is returned when the context deadline fires.
 	timeoutExitCode = 124
-	// defaultTimeout applies when the rule does not set its own.
+	// defaultTimeout applies when the caller passes 0.
 	defaultTimeout = 30 * time.Second
 )
 
@@ -26,10 +24,11 @@ type Result struct {
 	Truncated bool
 }
 
-// Stage is one segment of a pipeline. Stdin is only honored on stage 0.
+// Stage is one segment of a pipeline. Command[0] is the binary path
+// and the rest are argv. Timeout of 0 means defaultTimeout.
+// Stdin is only honored on stage 0.
 type Stage struct {
-	Path  string
-	Argv  []string
-	Rule  *config.CommandRule
-	Stdin io.Reader
+	Command []string
+	Timeout time.Duration
+	Stdin   io.Reader
 }

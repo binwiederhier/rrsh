@@ -253,9 +253,8 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			stdin = strings.NewReader(stdinStr)
 		}
 		stages = append(stages, &exec.Stage{
-			Path:  execPath,
-			Argv:  execArgv,
-			Stdin: stdin,
+			Command: append([]string{execPath}, execArgv...),
+			Stdin:   stdin,
 		})
 
 		rule, ok := s.matcher.Match(origPath, origArgv)
@@ -267,7 +266,7 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 			s.log.Denied(formatStagesForLog(stages), s.currentUser)
 			return nil, deny(fmt.Sprintf("%s not permitted to run as %s", util.JoinForLog(origPath, origArgv), asUser))
 		}
-		stages[i].Rule = rule
+		stages[i].Timeout = rule.Timeout
 	}
 	s.log.Allowed(formatStagesForLog(stages), s.currentUser)
 	return toRunResult(exec.ExecutePipeline(stages)), nil

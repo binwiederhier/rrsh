@@ -59,7 +59,7 @@ func runSudo(args []string) {
 	}
 
 	// Run it
-	res := exec.Execute(path, argv, rule, os.Stdin)
+	res := exec.Execute(append([]string{path}, argv...), rule.Timeout, os.Stdin)
 	os.Stdout.Write(res.Stdout)
 	os.Stderr.Write(res.Stderr)
 	os.Exit(res.ExitCode)
