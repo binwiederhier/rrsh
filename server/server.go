@@ -200,10 +200,10 @@ func (s *Server) handleRunCommand(params json.RawMessage) (any, *jsonrpcError) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return nil, &jsonrpcError{Code: errInvalidParams, Message: "invalid run_command params: " + err.Error()}
-	} else if len(p.Argv) == 0 {
-		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires non-empty argv"}
+	} else if len(p.Command) == 0 {
+		return nil, &jsonrpcError{Code: errInvalidParams, Message: "run_command requires non-empty command"}
 	}
-	return s.runPipeline([]runStep{{Argv: p.Argv, As: p.As}}, p.Stdin)
+	return s.runPipeline([]runStep{{Command: p.Command, As: p.As}}, p.Stdin)
 }
 
 // handleRunPipeline executes a multi-stage pipeline. `stdin` (if set)
@@ -234,10 +234,10 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 	}
 	stages := make([]*exec.Stage, 0, len(steps))
 	for i, step := range steps {
-		if len(step.Argv) == 0 {
-			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty argv", i)}
+		if len(step.Command) == 0 {
+			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
-		origPath, origArgv := step.Argv[0], step.Argv[1:]
+		origPath, origArgv := step.Command[0], step.Command[1:]
 		asUser := normalizeUser(step.As, s.currentUser)
 
 		// Build the exec form (sudo-wrapped if needed) before validation

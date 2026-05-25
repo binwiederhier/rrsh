@@ -5,8 +5,8 @@ A JSON-RPC server that exposes a curated, allowlisted set of commands to AI agen
 ## What it is
 
 - A plain JSON-RPC 2.0 server speaking NDJSON over stdio. Not MCP - see [Wire format note](#wire-format-note).
-- Three methods: `list_commands` (instructions and the full allowlist in one round-trip), `run_command` (one allowlisted argv), and `run_pipeline` (multi-stage pipeline). `run_command` is a thin wrapper - it desugars to a one-stage pipeline so both shapes share the same execution path.
-- All arguments are passed as real `argv` slices - no shell tokenization anywhere on the trust boundary.
+- Three methods: `list_commands` (instructions and the full allowlist in one round-trip), `run_command` (one allowlisted command), and `run_pipeline` (multi-stage pipeline). `run_command` is a thin wrapper - it desugars to a one-stage pipeline so both shapes share the same execution path.
+- All arguments are passed as real argv slices - no shell tokenization anywhere on the trust boundary.
 - Designed to be reachable as `ssh -T rrsh@host` from a Claude session. The intended deployment story is to mention rrsh hosts in CLAUDE.md (no client-side MCP registration); rrsh self-describes via the `list_commands.instructions` field and an instructive rejection on shell-mode attempts.
 
 ## Layout
@@ -51,7 +51,7 @@ The privileged half (`cmd/sudo.go`) deliberately does NOT import `server/`. That
 - ASCII only in code, comments, and docs. Nothing that isn't on a standard US keyboard: write `--` instead of em/en-dashes, `"` and `'` instead of curly quotes, `->` instead of right-arrow, `...` (three periods) instead of the ellipsis character.
 - The privileged half deliberately depends on as few packages as possible. Shared pure helpers (e.g. `util.JoinForLog` for audit-log formatting) live in `util/` so both `cmd/sudo.go` and `server/` import the same implementation without pulling JSON-RPC code into the root trust boundary.
 - User-identity lookups (`os/user.Current()`) happen at the cmd-layer entry points only - the application fails closed if it cannot determine the current user. Lower-level packages take `username string` as a parameter instead of doing their own lookups.
-- Config schema: `command` is a list of regexes. Element 0 matches the binary path, elements 1..N-1 match argv 1-for-1. Multiple rules can share a `command[0]` to express alternative argv shapes; the matcher tries them in declaration order.
+- Config schema: rule's `command` is a list of regexes. Element 0 matches the binary path, elements 1..N-1 match the request's `command` elements 1-for-1. Multiple rules can share a `command[0]` to express alternative command shapes; the matcher tries them in declaration order.
 - `errors.Is`/`errors.As` for sentinel-error checks (not `err == io.EOF`).
 - Tests are colocated with the package they test.
 

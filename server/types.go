@@ -52,9 +52,9 @@ type commandEntry struct {
 
 // runCommandParams is the request body of the `run_command` method.
 type runCommandParams struct {
-	Argv  []string `json:"argv"`
-	As    string   `json:"as,omitempty"`
-	Stdin string   `json:"stdin,omitempty"`
+	Command []string `json:"command"`
+	As      string   `json:"as,omitempty"`
+	Stdin   string   `json:"stdin,omitempty"`
 }
 
 // runPipelineParams: Pipeline is a value slice (not []*runStep) so a
@@ -67,8 +67,8 @@ type runPipelineParams struct {
 
 // runStep is one stage of a pipeline.
 type runStep struct {
-	Argv []string `json:"argv"`
-	As   string   `json:"as,omitempty"`
+	Command []string `json:"command"`
+	As      string   `json:"as,omitempty"`
 }
 
 // runResult is the response body of both `run_command` and `run_pipeline`.

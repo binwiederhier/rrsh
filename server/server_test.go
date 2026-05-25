@@ -163,7 +163,7 @@ func TestServer_ListCommands_OmitsEmptyInstructions(t *testing.T) {
 
 func TestServer_Run_Happy(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":4,"method":"run_command","params":{"argv":["/bin/echo","hello"]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":4,"method":"run_command","params":{"command":["/bin/echo","hello"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	rr := decodeRunResult(t, resps[0])
@@ -177,7 +177,7 @@ func TestServer_Run_Happy(t *testing.T) {
 
 func TestServer_Run_Denied(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":5,"method":"run_command","params":{"argv":["/bin/rm","-rf","/"]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":5,"method":"run_command","params":{"command":["/bin/rm","-rf","/"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	errObj, ok := resps[0]["error"].(map[string]any)
@@ -194,7 +194,7 @@ func TestServer_Run_Denied(t *testing.T) {
 
 func TestServer_Run_NonAbsolutePathDenied(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":6,"method":"run_command","params":{"argv":["echo","x"]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":6,"method":"run_command","params":{"command":["echo","x"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	errObj, ok := resps[0]["error"].(map[string]any)
@@ -210,7 +210,7 @@ func TestServer_Run_ArgWithSpacesIsLiteral(t *testing.T) {
 	t.Parallel()
 	// "hello world" stays one arg; /bin/echo prints it with the internal
 	// space preserved.
-	in := `{"jsonrpc":"2.0","id":7,"method":"run_command","params":{"argv":["/bin/echo","hello world"]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":7,"method":"run_command","params":{"command":["/bin/echo","hello world"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	rr := decodeRunResult(t, resps[0])
@@ -221,7 +221,7 @@ func TestServer_Run_ArgWithSpacesIsLiteral(t *testing.T) {
 
 func TestServer_Run_Pipeline(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":8,"method":"run_pipeline","params":{"pipeline":[{"argv":["/bin/echo","piped"]},{"argv":["/bin/cat"]}]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":8,"method":"run_pipeline","params":{"pipeline":[{"command":["/bin/echo","piped"]},{"command":["/bin/cat"]}]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	rr := decodeRunResult(t, resps[0])
@@ -235,7 +235,7 @@ func TestServer_Run_Pipeline(t *testing.T) {
 
 func TestServer_Run_PipelineWithDeniedStage(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":9,"method":"run_pipeline","params":{"pipeline":[{"argv":["/bin/echo","x"]},{"argv":["/bin/rm","-rf","/"]}]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":9,"method":"run_pipeline","params":{"pipeline":[{"command":["/bin/echo","x"]},{"command":["/bin/rm","-rf","/"]}]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	errObj, ok := resps[0]["error"].(map[string]any)
@@ -251,7 +251,7 @@ func TestServer_Run_PipelineWithDeniedStage(t *testing.T) {
 // - this is the example the user gave that motivated the JSON-RPC route.
 func TestServer_Run_PipeInsideArgIsLiteral(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":10,"method":"run_command","params":{"argv":["/bin/echo"," | > /dev/null"]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":10,"method":"run_command","params":{"command":["/bin/echo"," | > /dev/null"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	rr := decodeRunResult(t, resps[0])
@@ -263,7 +263,7 @@ func TestServer_Run_PipeInsideArgIsLiteral(t *testing.T) {
 func TestServer_Run_NonZeroExit(t *testing.T) {
 	t.Parallel()
 	// Child non-zero exit is NOT a transport error - it lives in result.exit.
-	in := `{"jsonrpc":"2.0","id":11,"method":"run_command","params":{"argv":["/bin/false"]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":11,"method":"run_command","params":{"command":["/bin/false"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if _, isErr := resps[0]["error"]; isErr {
@@ -316,8 +316,8 @@ func TestServer_Notification_NoResponse(t *testing.T) {
 func TestServer_MultipleRequests(t *testing.T) {
 	t.Parallel()
 	in := `{"jsonrpc":"2.0","id":1,"method":"list_commands"}` + "\n" +
-		`{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/bin/echo","x"]}}` + "\n" +
-		`{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"argv":["/bin/echo","y"]}}` + "\n"
+		`{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/bin/echo","x"]}}` + "\n" +
+		`{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"command":["/bin/echo","y"]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	if len(resps) != 3 {
@@ -335,7 +335,7 @@ func TestServer_RunCommand_RejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 	// run_command's params don't include `pipeline`; DisallowUnknownFields
 	// must reject it rather than silently ignoring the cross-method field.
-	in := `{"jsonrpc":"2.0","id":14,"method":"run_command","params":{"argv":["/bin/echo"],"pipeline":[{"argv":["/bin/echo"]}]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":14,"method":"run_command","params":{"command":["/bin/echo"],"pipeline":[{"command":["/bin/echo"]}]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	errObj, ok := resps[0]["error"].(map[string]any)
@@ -349,7 +349,7 @@ func TestServer_RunCommand_RejectsUnknownFields(t *testing.T) {
 
 func TestServer_RunPipeline_RejectsUnknownFields(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":14,"method":"run_pipeline","params":{"argv":["/bin/echo"],"pipeline":[{"argv":["/bin/echo"]}]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":14,"method":"run_pipeline","params":{"command":["/bin/echo"],"pipeline":[{"command":["/bin/echo"]}]}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	errObj, ok := resps[0]["error"].(map[string]any)
@@ -366,7 +366,7 @@ func TestServer_Run_OversizedRequestRejected(t *testing.T) {
 	// Build a request larger than maxRequestBytes - pad with whitespace
 	// inside a string so the JSON is still well-formed if it were parsed.
 	huge := strings.Repeat("x", maxRequestBytes+1024)
-	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"argv":["/bin/echo","` + huge + `"]}}` + "\n" +
+	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"command":["/bin/echo","` + huge + `"]}}` + "\n" +
 		// Follow with a valid request to confirm we resync.
 		`{"jsonrpc":"2.0","id":2,"method":"list_commands"}` + "\n"
 	out, err := testServer(t, in)
@@ -397,7 +397,7 @@ func TestServer_Run_ElevationReachesExecutor(t *testing.T) {
 	echoRoot.As = []string{"root"}
 	cfg := &config.Config{Commands: []config.CommandRule{echoRoot}}
 	out := &bytes.Buffer{}
-	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"argv":["/bin/echo","x"],"as":"root"}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":1,"method":"run_command","params":{"command":["/bin/echo","x"],"as":"root"}}` + "\n"
 	srv := mustNewServer(t, cfg, "tester", in, out)
 	if err := srv.Serve(); err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -416,7 +416,7 @@ func TestServer_Run_ElevationReachesExecutor(t *testing.T) {
 // check rejects it cleanly.
 func TestServer_Run_PipelineNullStageRejected(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":1,"method":"run_pipeline","params":{"pipeline":[{"argv":["/bin/echo","x"]},null]}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":1,"method":"run_pipeline","params":{"pipeline":[{"command":["/bin/echo","x"]},null]}}` + "\n"
 	out, err := testServer(t, in)
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -438,7 +438,7 @@ func TestServer_Run_PipelineLengthCapped(t *testing.T) {
 	t.Parallel()
 	stages := make([]string, maxPipelineStages+1)
 	for i := range stages {
-		stages[i] = `{"argv":["/bin/echo","x"]}`
+		stages[i] = `{"command":["/bin/echo","x"]}`
 	}
 	in := `{"jsonrpc":"2.0","id":1,"method":"run_pipeline","params":{"pipeline":[` + strings.Join(stages, ",") + `]}}` + "\n"
 	out, _ := testServer(t, in)
@@ -454,7 +454,7 @@ func TestServer_Run_PipelineLengthCapped(t *testing.T) {
 
 func TestServer_Run_Stdin(t *testing.T) {
 	t.Parallel()
-	in := `{"jsonrpc":"2.0","id":15,"method":"run_command","params":{"argv":["/bin/cat"],"stdin":"piped in"}}` + "\n"
+	in := `{"jsonrpc":"2.0","id":15,"method":"run_command","params":{"command":["/bin/cat"],"stdin":"piped in"}}` + "\n"
 	out, _ := testServer(t, in)
 	resps := decodeResponses(t, out.String())
 	rr := decodeRunResult(t, resps[0])

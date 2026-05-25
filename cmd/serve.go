@@ -92,15 +92,16 @@ and truncated. Always send a unique numeric "id" so you can correlate.
 
    The result has {instructions, commands}. Read
    "instructions" - it's host-specific guidance. Each entry in
-   "commands" has a regex list: command[0] matches argv[0] (the path),
-   command[i] matches argv[i]. len(argv) must equal len(command).
-   Once you know what's allowed, jump straight to "run_command" or
-   "run_pipeline" - no need to resend "list_commands" for subsequent calls.
+   "commands" has its own "command" field - a regex list where element
+   0 matches the path you send and element i matches your i-th argument.
+   The request's "command" array length must equal the rule's "command"
+   length. Once you know what's allowed, jump straight to "run_command"
+   or "run_pipeline" - no need to resend "list_commands" for subsequent calls.
 
 2) Run one command as the SSH user (default):
 
   echo '{"jsonrpc":"2.0","id":2,"method":"run_command",
-         "params":{"argv":["/usr/bin/whoami"]}}' | ssh -T %[1]s
+         "params":{"command":["/usr/bin/whoami"]}}' | ssh -T %[1]s
 
    Result: {"stdout":"...","stderr":"...","exit":0}
 
@@ -111,37 +112,37 @@ and truncated. Always send a unique numeric "id" so you can correlate.
    SSH user, which fails if the rule doesn't allow "$USER":
 
   echo '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{
-         "argv":["/usr/bin/journalctl","-u","ntfy","-n","100"],
+         "command":["/usr/bin/journalctl","-u","ntfy","-n","100"],
          "as":"root"}}' | ssh -T %[1]s
 
 4) Pipe data INTO a command (no shell involved - this is just a string
    handed to the child's stdin):
 
   echo '{"jsonrpc":"2.0","id":4,"method":"run_command","params":{
-         "argv":["/usr/bin/grep","-i","error"],
+         "command":["/usr/bin/grep","-i","error"],
          "stdin":"foo\nERROR: bar\nbaz\n"}}' | ssh -T %[1]s
 
 5) Pipeline - chain stages with run_pipeline. There is NO shell
-   anywhere in rrsh; "|" and ">" inside an argv element are literal
+   anywhere in rrsh; "|" and ">" inside a command element are literal
    bytes, not metacharacters. Each stage is independently matched and
    authorized. stdout of stage i feeds stdin of stage i+1. Per-stage
    "as" lets an elevated stage feed an unprivileged filter:
 
   echo '{"jsonrpc":"2.0","id":5,"method":"run_pipeline","params":{"pipeline":[
-         {"argv":["/usr/bin/journalctl","-u","ntfy","-n","1000"],"as":"root"},
-         {"argv":["/usr/bin/grep","-i","error"]}
+         {"command":["/usr/bin/journalctl","-u","ntfy","-n","1000"],"as":"root"},
+         {"command":["/usr/bin/grep","-i","error"]}
        ]}}' | ssh -T %[1]s
 
 6) Batch multiple requests in one SSH session, one JSON object per line:
 
   printf '%%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' \
-    '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/whoami"]}}' \
-    '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"argv":["/usr/bin/uptime"]}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/whoami"]}}' \
+    '{"jsonrpc":"2.0","id":3,"method":"run_command","params":{"command":["/usr/bin/uptime"]}}' \
     | ssh -T %[1]s
 
 Constraints:
-  - argv[0] must be an absolute path (start with "/").
+  - command[0] must be an absolute path (start with "/").
   - Per-command timeout is 30s unless the rule says otherwise; timeouts
     return exit=124, timed_out=true.
   - Stdout and stderr are each capped at 10 MiB; overflow is dropped and

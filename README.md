@@ -11,8 +11,8 @@ Here's a super simple example:
 echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T -i ~/.ssh/id_ai rrsh@host 
 
 # Do some diagnostics (depends on allowed commands)
-echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/systemctl", "status", "ntfy"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host
-echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/last", "-n", "5"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host  
+echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/systemctl", "status", "ntfy"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host
+echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/last", "-n", "5"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host  
 ```
 
 ## Installation
@@ -92,18 +92,18 @@ Fields on each command entry:
 
 | Field         | Default       | Meaning                                                                          |
 | ------------- | ------------- | -------------------------------------------------------------------------------- |
-| `command`     | required      | List of regexes (length ≥ 1). Element 0 matches the binary path; elements 1..N-1 match argv 1-for-1. A call passes only if path matches command[0] AND argv has exactly `len(command)-1` elements AND every argv[i] matches command[i+1]. Patterns are auto-anchored. |
+| `command`     | required      | List of regexes (length >= 1). Element 0 matches the binary path; elements 1..N-1 match the request's `command` elements 1-for-1. A call passes only if the request's `command` length equals the rule's `command` length AND every request element matches the rule's regex at the same index. Patterns are auto-anchored. |
 | `timeout`     | `"30s"`       | Per-command timeout, e.g. `"60s"`. Overrides the built-in 30-second default.     |
 | `as`          | `["$USER"]`   | Users the command may run as. `$USER` resolves to the SSH user at runtime. Other entries must be valid POSIX login names. |
 | `description` | empty         | Free-text shown to Claude in `list_commands.commands[*].description`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
 Rules:
 
-- The matcher requires `command[0]` to match the caller-supplied path - the string the AI sent as `argv[0]` in the `run` call (a regex, but most operators write a literal like `"/usr/bin/whoami"`). An additional defense-in-depth check requires that path to start with `/`, so accidentally-permissive regexes can't enable PATH-resolution of relative names.
+- The matcher requires `command[0]` to match the caller-supplied path - the string the AI sent as `command[0]` in the `run_command`/`run_pipeline` call (a regex, but most operators write a literal like `"/usr/bin/whoami"`). An additional defense-in-depth check requires that path to start with `/`, so accidentally-permissive regexes can't enable PATH-resolution of relative names.
 - `command[0]` can legitimately be a regex when you want one rule to cover related binaries - e.g. `"/usr/bin/(cat|head)"`.
-- Argv matching is element-for-element. `["foo", "bar"]` (two argv elements) is structurally distinct from `["foo bar"]` (one element with a space) - the matcher counts elements separately, so an operator's regex written for two args can't be silently fooled by a single joined element. This is the structural guarantee that makes regex-on-argv safe against shell-injection-style attacks.
+- Command-array matching is element-for-element. `["foo", "bar"]` (two elements) is structurally distinct from `["foo bar"]` (one element with a space) - the matcher counts elements separately, so an operator's regex written for two args can't be silently fooled by a single joined element. This is the structural guarantee that makes regex-on-argv safe against shell-injection-style attacks.
 - Each entry of `command` is wrapped in `^(?:...)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
-- **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one argv shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
+- **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one command shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
 - Unknown JSON fields are rejected - typos in the config fail fast rather than silently weakening the policy.
 
 ## How it works
@@ -111,8 +111,8 @@ Rules:
 - Installed as a user's login shell. sshd authenticates the SSH client and execs `/usr/bin/rrsh` with the connection's stdio.
 - rrsh reads newline-delimited JSON-RPC 2.0 requests on stdin and writes responses on stdout. No shell-string parsing, no `-c` mode.
 - Three methods are exposed: `list_commands` (host-specific instructions and the full allowlist), `run_command` (one allowlisted command), and `run_pipeline` (chained stages with native Go pipes).
-- Arguments are passed as a real `argv` array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
-- Commands are matched against `/etc/rrsh/rrsh.json` rules (fixed path - both the server and the privileged `rrsh sudo` subcommand read the same file, so they cannot disagree about the allowlist). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match argv 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
+- Arguments are passed as a real argv array - quoting, embedded spaces, and literal metacharacters in argument *values* are not a parser concern.
+- Commands are matched against `/etc/rrsh/rrsh.json` rules (fixed path - both the server and the privileged `rrsh sudo` subcommand read the same file, so they cannot disagree about the allowlist). Each rule is a list of regexes - element 0 matches the binary path, elements 1..N-1 match the request's `command` elements 1-for-1 - plus an optional per-command timeout and a list of users the command may run as.
 - Allow/deny decisions go to syslog (`auth.info` / `auth.warning`).
 
 ## Wire format
@@ -121,14 +121,14 @@ Plain JSON-RPC 2.0 over NDJSON. Send one request per line on stdin, get one resp
 
 ```text
 {"jsonrpc":"2.0","id":1,"method":"list_commands"}
-{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"argv":["/usr/bin/whoami"]}}
+{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/whoami"]}}
 ```
 
 Server-side refusals (matcher denial, elevation disabled, oversize pipeline) come back as the JSON-RPC `error` envelope with application code `-32000`. A child process's own non-zero exit is **not** an RPC error - it lives in `result.exit`. `run_command` and `run_pipeline` return the same `result` shape.
 
 ### `list_commands`
 
-No params. Returns `{instructions, commands}`. `instructions` is the host-specific guidance an operator put in the config - Claude should read it first. `commands` is the full allowlist: each entry is `{command, as, description?, timeout_seconds?}` where `command` is the operator-authored regex list (element 0 = path regex, elements 1..N-1 = argv regexes). One round-trip is enough to discover everything.
+No params. Returns `{instructions, commands}`. `instructions` is the host-specific guidance an operator put in the config - Claude should read it first. `commands` is the full allowlist: each entry is `{command, as, description?, timeout_seconds?}` where `command` is the operator-authored regex list (element 0 = path regex, elements 1..N-1 = argument regexes). One round-trip is enough to discover everything.
 
 ### `run_command`
 
@@ -140,14 +140,14 @@ Runs one allowlisted command:
   "id": 1,
   "method": "run_command",
   "params": {
-    "argv": ["/usr/bin/journalctl", "-u", "ntfy", "-n", "100"],
+    "command": ["/usr/bin/journalctl", "-u", "ntfy", "-n", "100"],
     "as": "root",
     "stdin": "optional input"
   }
 }
 ```
 
-`argv[0]` must be an absolute path. `as` requests a target user (must be in the matched rule's `as:` list). `stdin` (optional) is fed to the child on its stdin.
+`command[0]` must be an absolute path. `as` requests a target user (must be in the matched rule's `as:` list). `stdin` (optional) is fed to the child on its stdin.
 
 ### `run_pipeline`
 
@@ -160,15 +160,15 @@ Chains stages with native Go pipes (no shell). Stdout of stage *i* is wired to s
   "method": "run_pipeline",
   "params": {
     "pipeline": [
-      { "argv": ["/usr/bin/journalctl", "-u", "ntfy", "-n", "1000"], "as": "root" },
-      { "argv": ["/usr/bin/grep", "ERROR"] }
+      { "command": ["/usr/bin/journalctl", "-u", "ntfy", "-n", "1000"], "as": "root" },
+      { "command": ["/usr/bin/grep", "ERROR"] }
     ],
     "stdin": "optional input fed to stage 0"
   }
 }
 ```
 
-There is no shell, so the user-typed `|` and `>` characters have no meaning anywhere in rrsh. If your config allows `cat` and `grep` separately, the AI gets `cat /var/log/foo | grep error` by sending a two-stage `pipeline` array. There is no quoting concern: a literal pipe character inside an argument value (e.g. `grep "|"`) is just a byte in an argv element, not a metacharacter.
+There is no shell, so the user-typed `|` and `>` characters have no meaning anywhere in rrsh. If your config allows `cat` and `grep` separately, the AI gets `cat /var/log/foo | grep error` by sending a two-stage `pipeline` array. There is no quoting concern: a literal pipe character inside an argument value (e.g. `grep "|"`) is just a byte in a command element, not a metacharacter.
 
 **Return value (both methods):** structured JSON in the `result` field:
 
@@ -186,9 +186,9 @@ When a rule's `as` list contains a user other than `$USER`, Claude must request 
 
 | `run_command` params                               | Resolves to                                                                  |
 | -------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `{argv: [...]}`                                    | run as the SSH user (only valid if the rule's `as` includes `$USER`)         |
-| `{argv: [...], as: "root"}`                        | run as `root` (only valid if `root` is in the rule's `as`)                   |
-| `{argv: [...], as: "deploy"}`                      | run as `deploy` (only valid if `deploy` is in the rule's `as`)               |
+| `{command: [...]}`                                    | run as the SSH user (only valid if the rule's `as` includes `$USER`)         |
+| `{command: [...], as: "root"}`                     | run as `root` (only valid if `root` is in the rule's `as`)                   |
+| `{command: [...], as: "deploy"}`                   | run as `deploy` (only valid if `deploy` is in the rule's `as`)               |
 
 The AI sees each rule's `as` list in `list_commands.commands[*].as`, so it can pick the right value without guessing. Omitting `as` for a rule that doesn't include `$USER` is a denial.
 
