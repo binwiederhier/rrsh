@@ -247,7 +247,7 @@ func (s *Server) buildStage(step runStep, isFirst bool, stdinStr string) (*exec.
 	rule, ok := s.matcher.MatchAsUser(step.Command, step.As)
 	if !ok {
 		s.log.Denied(util.JoinForLog(step.Command), s.currentUser)
-		return nil, denyForCommand(s.currentUser, step.Command)
+		return nil, deny("command not allowed: " + util.JoinForLog(step.Command))
 	}
 	command := step.Command
 	if step.As != "" && step.As != s.currentUser {

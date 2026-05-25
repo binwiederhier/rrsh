@@ -26,12 +26,6 @@ func deny(msg string) *jsonrpcError {
 	return &jsonrpcError{Code: errDenied, Message: msg}
 }
 
-// denyForCommand keeps the deny message in sync with the audit log
-// format: same command rendering, same surrounding wording.
-func denyForCommand(user string, command []string) *jsonrpcError {
-	return deny("command not allowed for user " + user + ": " + util.JoinForLog(command))
-}
-
 // decodeParams strictly decodes a JSON-RPC `params` payload into dst.
 // Empty payload and unknown fields both yield errInvalidParams.
 func decodeParams[T any](method string, raw json.RawMessage, dst *T) *jsonrpcError {
