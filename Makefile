@@ -1,7 +1,8 @@
 .PHONY: help \
         build build-linux-amd64 build-linux-armv6 build-linux-armv7 build-linux-arm64 \
+        build-results \
         release release-snapshot \
-        test clean deps \
+        check test vet fmt fmt-check clean deps update \
         install-linux-amd64 install-linux-armv6 install-linux-armv7 install-linux-arm64 \
         install-linux-amd64-deb install-linux-armv6-deb install-linux-armv7-deb install-linux-arm64-deb \
         remove-binary purge-package
@@ -13,11 +14,19 @@ help:
 	@echo "  make build-linux-armv6          - Build rrsh (Linux, armv6 only)"
 	@echo "  make build-linux-armv7          - Build rrsh (Linux, armv7 only)"
 	@echo "  make build-linux-arm64          - Build rrsh (Linux, arm64 only)"
+	@echo "  make build-results              - Print build artifacts and checksums"
 	@echo
-	@echo "Test/clean:"
+	@echo "Test/check:"
+	@echo "  make check                      - Run tests, formatting checks and vetting"
 	@echo "  make test                       - Run tests"
+	@echo "  make vet                        - Run 'go vet'"
+	@echo "  make fmt                        - Run 'gofmt -s -w'"
+	@echo "  make fmt-check                  - Run 'gofmt', but don't change anything"
 	@echo "  make clean                      - Remove dist/ folder"
+	@echo
+	@echo "Dependencies:"
 	@echo "  make deps                       - Install GoReleaser"
+	@echo "  make update                     - Update Go module dependencies and tools"
 	@echo
 	@echo "Releasing:"
 	@echo "  make release                    - Create a release"
@@ -48,20 +57,44 @@ build-linux-armv7: deps
 build-linux-arm64: deps
 	goreleaser build --snapshot --clean --id rrsh_linux_arm64
 
-release: clean deps test
+build-results:
+	[ -f dist/artifacts.json ] && cat dist/artifacts.json || true
+	[ -f dist/metadata.json ] && cat dist/metadata.json || true
+	[ -f dist/checksums.txt ] && cat dist/checksums.txt || true
+	find dist -maxdepth 2 -type f \
+		\( -name '*.deb' -or -name '*.rpm' -or -name '*.tar.gz' -or -name 'rrsh' \) \
+		-exec sha256sum {} \;
+
+release: clean deps check
 	goreleaser release --clean
 
-release-snapshot: clean deps test
+release-snapshot: clean deps check
 	goreleaser release --snapshot --clean
+
+check: test fmt-check vet
 
 test:
 	go test ./...
+
+vet:
+	go vet ./...
+
+fmt:
+	gofmt -s -w .
+
+fmt-check:
+	test -z "$(shell gofmt -l .)"
 
 clean:
 	rm -rf dist
 
 deps:
 	which goreleaser >/dev/null || go install github.com/goreleaser/goreleaser/v2@latest
+
+update:
+	go get -u ./...
+	go mod tidy
+	go install github.com/goreleaser/goreleaser/v2@latest
 
 install-linux-amd64: remove-binary
 	sudo cp -a dist/rrsh_linux_amd64_linux_amd64_v1/rrsh /usr/bin/rrsh

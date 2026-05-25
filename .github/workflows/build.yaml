@@ -1,0 +1,19 @@
+name: build
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Install Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25.x'
+      - name: Build all the things
+        run: make build
+      - name: Print build results and checksums
+        run: make build-results
