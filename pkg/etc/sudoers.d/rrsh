@@ -1,0 +1,5 @@
+# Lets the 'rrsh' user re-enter rrsh under sudo to run allowlisted
+# commands as root. Disabled by default - uncomment to enable.
+# To allow other users (e.g. deploy), change (root) to (root,deploy).
+
+# rrsh ALL=(root) NOPASSWD: /usr/bin/rrsh sudo *

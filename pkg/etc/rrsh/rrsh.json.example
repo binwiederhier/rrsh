@@ -1,0 +1,91 @@
+{
+  "instructions": "This is the shipped example config. You are connected via rrsh, a read-only-ish JSON-RPC diagnostic gateway. Call `list_commands` to see this text plus the full allowlist; each rule's `command` field is a list of regexes (element 0 = path regex, elements 1..N-1 = argument regexes, all auto-anchored). The request's `command` length must equal the rule's `command` length AND each element must match its corresponding pattern. Multiple rules may share command[0] to describe alternative command shapes.\n\nA rule with empty `as` authorizes only the SSH user. A non-empty `as` is a literal allowlist; for any user other than the SSH user (e.g. `root`) you MUST pass `\"as\":\"root\"` (or whichever user) explicitly on the `run_command` call - rrsh does not auto-elevate. Elevation also requires the operator to uncomment the grant in /etc/sudoers.d/rrsh; if it isn't, the spawned sudo will fail and the error surfaces in `result.stderr`.\n\nThis file is intentionally generic and conservative. Before deploying it on a real host, tighten the regexes (e.g. lock log paths to specific services), drop rules you don't need, and add host-specific ones. See examples/ in the rrsh source tree for richer configurations.\n\nNo write access by design. If a command you want isn't allowed, stop and tell the operator rather than trying to work around the matcher.",
+  "commands": [
+    { "command": ["/usr/bin/whoami"],
+      "description": "Show the effective username." },
+
+    { "command": ["/usr/bin/hostname"],
+      "description": "Print the system hostname." },
+
+    { "command": ["/usr/bin/uptime"],
+      "description": "Show system uptime and load average." },
+
+    { "command": ["/usr/bin/uname", "-a"],
+      "description": "Print kernel/OS info." },
+
+    { "command": ["/usr/bin/df", "-(h|i)?"],
+      "description": "Report filesystem space usage. Optional `-h` (human-readable) or `-i` (inodes)." },
+
+    { "command": ["/usr/bin/free", "-(h|m|g)?"],
+      "description": "Report memory usage. Optional unit flag." },
+
+    { "command": ["/usr/bin/ps", "aux"],
+      "description": "List processes (BSD-style: ps aux)." },
+
+    { "command": ["/usr/bin/ps", "-ef"],
+      "description": "List processes (System V-style: ps -ef)." },
+
+    { "command": ["/usr/bin/top", "-bn1"],
+      "description": "Take one batch-mode snapshot of top." },
+
+    { "command": ["/usr/bin/ls", "-la", "/var/log(/[^./][^/]*)*"],
+      "description": "List a log directory (no `..`, no dotfiles in path)." },
+
+    { "command": ["/usr/bin/cat", "/var/log/[\\w.-]+\\.log(\\.\\d+)?"],
+      "description": "Read a top-level /var/log/*.log file (covers .1, .2, ... rotations)." },
+
+    { "command": ["/usr/bin/tail", "-n", "\\d+", "/var/log/[\\w.-]+\\.log(\\.\\d+)?"],
+      "description": "Tail the last N lines of a top-level /var/log/*.log file." },
+
+    { "command": ["/usr/bin/systemctl", "(status|is-active)", "[\\w.@-]+"],
+      "description": "Inspect a systemd unit's runtime state." },
+
+    { "command": ["/usr/bin/systemctl", "list-units", "--type=service"],
+      "description": "List loaded service units." },
+
+    { "command": ["/usr/sbin/ip", "(addr|route|link)"],
+      "description": "Show network interfaces, routes, or links." },
+
+    { "command": ["/usr/bin/ss", "-(t|u|tu)lnp"],
+      "description": "List listening sockets with PIDs." },
+
+    { "command": ["/usr/bin/ping", "-c", "\\d+", "[a-zA-Z0-9][a-zA-Z0-9.-]*"], "timeout": "30s",
+      "description": "Ping a host a fixed number of times: -c <count> <host>." },
+
+    { "command": ["/usr/bin/dig", "[a-zA-Z0-9][a-zA-Z0-9.-]*"],
+      "description": "DNS lookup of a single hostname (system resolver only - no @server)." },
+
+    { "command": ["/usr/bin/grep", "-i", ".+"],
+      "description": "Case-insensitive grep, as a pipeline stage." },
+
+    { "command": ["/usr/bin/wc", "-l"],
+      "description": "Count lines, as a pipeline stage." },
+
+    { "command": ["/usr/bin/jq", "\\S+"],
+      "description": "Process JSON, as a pipeline stage." },
+
+    { "command": ["/usr/bin/journalctl", "--no-pager", "-u", "[\\w.@-]+", "-n", "\\d+"], "as": ["root"],
+      "description": "Show the last N journal entries for a systemd unit. Runs as root so service-private journal scopes are visible. Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/journalctl", "--no-pager", "-u", "[\\w.@-]+", "--since", ".+"], "as": ["root"],
+      "description": "Show journal entries for a unit since a time expression (e.g. \"1 hour ago\"). Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/du", "-sh", "/var/lib(/[^./][^/]*)*"], "as": ["root"], "timeout": "60s",
+      "description": "Summarize disk usage under /var/lib (or a subpath). Runs as root to traverse mode-700 service data dirs. Up to 60s. Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/ls", "-la", "/var/lib(/[^./][^/]*)*"], "as": ["root"],
+      "description": "List /var/lib or a subpath as root (so mode-700 service dirs are visible). Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/last", "-n", "\\d+"], "as": ["root"],
+      "description": "Show the last N successful logins from /var/log/wtmp. Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/lastb", "-n", "\\d+"], "as": ["root"],
+      "description": "Show the last N failed login attempts from /var/log/btmp - useful for spotting SSH brute-force. Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/fail2ban-client", "status"], "as": ["root"],
+      "description": "List active fail2ban jails. Pass `as: \"root\"`." },
+
+    { "command": ["/usr/bin/fail2ban-client", "status", "[\\w-]+"], "as": ["root"],
+      "description": "Show currently-banned IPs in a specific fail2ban jail. Pass `as: \"root\"`." }
+  ]
+}
