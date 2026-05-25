@@ -42,15 +42,12 @@ func needsLogEscape(r rune) bool {
 	return r < 0x20 || r == 0x7F
 }
 
-// JoinForLog space-joins (path, argv) with each element run through
+// JoinForLog space-joins command with each element run through
 // EscapeForLog, safe to drop into a syslog record.
-func JoinForLog(path string, argv []string) string {
-	if len(argv) == 0 {
-		return EscapeForLog(path)
+func JoinForLog(command []string) string {
+	escaped := make([]string, len(command))
+	for i, s := range command {
+		escaped[i] = EscapeForLog(s)
 	}
-	escaped := make([]string, len(argv))
-	for i, a := range argv {
-		escaped[i] = EscapeForLog(a)
-	}
-	return EscapeForLog(path) + " " + strings.Join(escaped, " ")
+	return strings.Join(escaped, " ")
 }

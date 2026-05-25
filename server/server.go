@@ -237,63 +237,47 @@ func (s *Server) runPipeline(steps []runStep, stdinStr string) (any, *jsonrpcErr
 		if len(step.Command) == 0 {
 			return nil, &jsonrpcError{Code: errInvalidParams, Message: fmt.Sprintf("pipeline stage %d has empty command", i)}
 		}
-		origPath, origArgv := step.Command[0], step.Command[1:]
-		asUser := step.As
-		if asUser == "" || asUser == auth.SelfUser {
-			asUser = s.currentUser
+
+		// Validate first. MatchAsUser handles the $USER substitution.
+		rule, ok := s.matcher.MatchAsUser(step.Command, step.As)
+		if !ok {
+			s.log.Denied(util.JoinForLog(step.Command), s.currentUser)
+			return nil, deny("command not allowed: " + util.JoinForLog(step.Command))
 		}
 
-		// Pick a matcher bound to the target user. The self matcher
-		// (built at server construction) covers the common un-elevated
-		// case; elevation needs an ephemeral matcher bound to the
-		// target user since matcher.Match authorizes its bound user.
-		m := s.matcher
-		if asUser != s.currentUser {
-			m = matcher.NewForUser(s.cfg.Commands, asUser)
-		}
-
-		// Build the exec form (sudo-wrapped if needed) before validation
-		// so a denial log records what we would have run. The matcher
-		// runs against the original below - rules describe user intent,
-		// not the sudo plumbing.
-		execPath, execArgv := origPath, origArgv
-		if asUser != s.currentUser {
-			execPath, execArgv = s.buildSudoCommand(asUser, origPath, origArgv)
+		// Build the exec form (sudo-wrapped if elevation is needed).
+		command := step.Command
+		if step.As != "" && step.As != auth.SelfUser && step.As != s.currentUser {
+			command = s.buildSudoCommand(step.As, step.Command[0], step.Command[1:])
 		}
 		var stdin io.Reader
 		if i == 0 && stdinStr != "" {
 			stdin = strings.NewReader(stdinStr)
 		}
 		stages = append(stages, &exec.Stage{
-			Command: append([]string{execPath}, execArgv...),
+			Command: command,
+			Timeout: rule.Timeout,
 			Stdin:   stdin,
 		})
-
-		rule, ok := m.Match(step.Command)
-		if !ok {
-			s.log.Denied(formatStagesForLog(stages), s.currentUser)
-			return nil, deny(fmt.Sprintf("command not allowed for %s: %s", asUser, util.JoinForLog(origPath, origArgv)))
-		}
-		stages[i].Timeout = rule.Timeout
 	}
 	s.log.Allowed(formatStagesForLog(stages), s.currentUser)
 	return toRunResult(exec.ExecutePipeline(stages)), nil
 }
 
-// buildSudoCommand returns (path, argv) that spawns /usr/bin/sudo
-// to re-enter rrsh's privileged half:
+// buildSudoCommand returns the full command (path + args) that spawns
+// /usr/bin/sudo to re-enter rrsh's privileged half:
 //
 //	/usr/bin/sudo -n [-u USER] -- /usr/bin/rrsh sudo <path> <argv...>
 //
 // -u is omitted for root (sudo's default). The `--` is defense-in-depth:
 // s.rrsh and path are both absolute today, but `--` protects against a
 // future regression in either invariant.
-func (s *Server) buildSudoCommand(user, path string, argv []string) (string, []string) {
-	args := []string{"-n"}
+func (s *Server) buildSudoCommand(user, path string, argv []string) []string {
+	cmd := []string{"/usr/bin/sudo", "-n"}
 	if user != "root" {
-		args = append(args, "-u", user)
+		cmd = append(cmd, "-u", user)
 	}
-	args = append(args, "--", s.rrsh, "sudo", path)
-	args = append(args, argv...)
-	return "/usr/bin/sudo", args
+	cmd = append(cmd, "--", s.rrsh, "sudo", path)
+	cmd = append(cmd, argv...)
+	return cmd
 }

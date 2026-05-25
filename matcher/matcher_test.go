@@ -190,3 +190,29 @@ func TestMatch_AuthAllowsWhenUserInAsList(t *testing.T) {
 		t.Error("rule's as=[root] should authorize root")
 	}
 }
+
+// TestMatchAsUser_ElevationPath: matcher bound to SSH user, request
+// asks for elevation to root - MatchAsUser("root") authorizes against
+// the rule's as: list.
+func TestMatchAsUser_ElevationPath(t *testing.T) {
+	t.Parallel()
+	rule := makeRule("/usr/bin/whoami")
+	rule.As = []string{"root"}
+	m := NewForUser([]config.CommandRule{rule}, "tester")
+
+	// Bare Match (= MatchAsUser with "") authorizes the SSH user.
+	if _, ok := m.Match([]string{"/usr/bin/whoami"}); ok {
+		t.Error("rule's as=[root] should not authorize tester")
+	}
+	// MatchAsUser with explicit "root" target authorizes.
+	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, "root"); !ok {
+		t.Error("MatchAsUser(root) should be allowed by rule's as=[root]")
+	}
+	// $USER and "" resolve to the matcher's user (tester).
+	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, auth.SelfUser); ok {
+		t.Error("MatchAsUser($USER) should resolve to tester and be denied")
+	}
+	if _, ok := m.MatchAsUser([]string{"/usr/bin/whoami"}, ""); ok {
+		t.Error("MatchAsUser(\"\") should resolve to tester and be denied")
+	}
+}

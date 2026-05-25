@@ -36,10 +36,21 @@ func NewForUser(rules []config.CommandRule, user string) *Matcher {
 }
 
 // Match returns the first rule whose command pattern matches AND whose
-// `as:` list authorizes the matcher's user. auth.SelfUser entries in
-// the rule's `as:` list are resolved against the matcher's user.
-// command[0] is the binary path; command[1:] is argv.
+// `as:` list authorizes the matcher's user. Shorthand for
+// MatchAsUser(command, "").
 func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
+	return m.MatchAsUser(command, "")
+}
+
+// MatchAsUser returns the first rule whose command pattern matches AND
+// whose `as:` list authorizes asUser. An empty asUser or auth.SelfUser
+// resolves to the matcher's user; auth.SelfUser entries inside the
+// rule's `as:` list resolve the same way. command[0] is the binary
+// path; command[1:] is argv.
+func (m *Matcher) MatchAsUser(command []string, asUser string) (*config.CommandRule, bool) {
+	if asUser == "" || asUser == auth.SelfUser {
+		asUser = m.user
+	}
 	// Defense-in-depth: refuse relative paths even if an operator wrote
 	// an over-permissive command[0] regex, since exec would PATH-resolve.
 	if len(command) == 0 || !strings.HasPrefix(command[0], "/") {
@@ -47,10 +58,7 @@ func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
 	}
 	for i := range m.rules {
 		rule := &m.rules[i]
-		if !patternMatches(command, rule) {
-			continue
-		}
-		if !m.authorized(rule) {
+		if !patternMatches(command, rule) || !m.authorized(rule, asUser) {
 			continue
 		}
 		return rule, true
@@ -58,14 +66,14 @@ func (m *Matcher) Match(command []string) (*config.CommandRule, bool) {
 	return nil, false
 }
 
-// authorized reports whether the matcher's user is in rule.As, with
-// auth.SelfUser substituted to the matcher's user.
-func (m *Matcher) authorized(rule *config.CommandRule) bool {
+// authorized reports whether asUser is in rule.As, with auth.SelfUser
+// substituted to the matcher's user.
+func (m *Matcher) authorized(rule *config.CommandRule, asUser string) bool {
 	for _, allowed := range rule.As {
 		if allowed == auth.SelfUser {
 			allowed = m.user
 		}
-		if allowed == m.user {
+		if allowed == asUser {
 			return true
 		}
 	}

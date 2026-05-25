@@ -43,7 +43,7 @@ func runSudo(args []string) {
 	// whatever sudo elevated to)
 	rule, ok := m.Match(args)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", util.JoinForLog(args[0], args[1:]))
+		fmt.Fprintf(os.Stderr, "rrsh: command not allowed: %s\n", util.JoinForLog(args))
 		os.Exit(exitDenied)
 	}
 

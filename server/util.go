@@ -70,7 +70,7 @@ func formatStagesForLog(stages []*exec.Stage) string {
 			parts[i] = ""
 			continue
 		}
-		parts[i] = util.JoinForLog(s.Command[0], s.Command[1:])
+		parts[i] = util.JoinForLog(s.Command)
 	}
 	return strings.Join(parts, " | ")
 }
