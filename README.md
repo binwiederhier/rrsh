@@ -1,26 +1,47 @@
 # rrsh - really restricted shell
 
-> [!WARNING]
-> **WORK IN PROGRESS.** rrsh is under active development. The wire format, config schema, and CLI may change without notice. Do not deploy to production yet. No stability guarantees until v1.0.
+A JSON-RPC based shell that lets an AI agent (Claude, Cursor) run a curated set of commands on a remote host. Installs as a user's login shell so sshd handles auth and transport - **no daemon to keep running, no port to firewall, no auth code in rrsh itself**. The project has zero runtime dependencies (Go stdlib only).
 
-A JSON-RPC server that lets an AI agent (Claude, Cursor) run a curated set of commands on a remote host. Installs as a user's login shell so sshd handles auth and transport - no daemon to keep running, no port to firewall, no auth code in rrsh itself. The project has zero runtime dependencies (Go stdlib only).
+You can finally ask your AI things like:
 
-Useful for letting your AI log into a server and do bounded diagnostic work (`systemctl status`, `journalctl -u ...`, `tail /var/log/...`, etc.) without giving it a real shell.
+- _Check the nginx logs on my web server and figure out the top 10 errors_
+- _Help me diagnose the top 10 abusing IP addresses on my server_
+- _Is my server healthy? Check services, logs and Prometheus/Grafana metrics._
 
-Here's a super simple example:
+Here's an example asking about the top 3 errors on [ntfy.sh](https://ntfy.sh):
 
-```bash
-# Lists all allowed commands
-echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T -i ~/.ssh/id_ai rrsh@host 
-
-# Do some diagnostics (depends on allowed commands)
-echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/systemctl", "status", "ntfy"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host
-echo '{"jsonrpc":"2.0","id":2,"method":"run_command","params":{"command":["/usr/bin/last", "-n", "5"]}}' | ssh -T -i ~/.ssh/id_ai rrsh@host  
-```
+<table>
+<tr>
+<td><img src="assets/rrsh-prompt-1.png"></td>
+<td><img src="assets/rrsh-prompt-1-result.png"></td>
+</tr></table>
 
 ## Installation
 
-1. **Install the package.** Download a `.deb` or `.rpm` from the releases page:
+### Setup on your local machine
+
+To be able to say `log into <myhost> and look at the logs`, you need to create an SSH key that the AI (Claude, Cursor)
+can use and tell it how to use rrsh. I did this in my own CLAUDE.md file like so:
+
+```
+## SSH Access
+
+There is an SSH key at `~/Code/.ssh/id_claude` that can be used to connect to some servers for diagnosing issues.
+
+On some servers, an `rrsh` user is configured to expose the rrsh JSON-RPC server (see github.com/binwiederhier/rrsh project for details). Connect with: `ssh -T -i ~/Code/.ssh/id_claude rrsh@<server>`
+
+Use `-T` to disable PTY allocation: rrsh speaks JSON-RPC over stdin/stdout, not an interactive shell.
+```
+
+You can generate that key with `ssh-keygen -f ~/Code/.ssh/id_claude`. 
+
+Please note that it is highly recommended to use a separate key for rrsh, and to keep your real private key away from
+Claude and Cursor. I use [sandclaude](https://github.com/binwiederhier/sandclaude) to run Claude in a container and keep
+it away from my real computer.
+
+### Setup on your server(s)
+
+1. **Install the package.** Download a `.deb` or `.rpm` from the [releases page](https://github.com/binwiederhier/rrsh/releases):
 
    ```bash
    sudo dpkg -i rrsh_*.deb
@@ -89,8 +110,6 @@ Top-level fields:
 | `instructions` | empty       | Returned in `list_commands.instructions` - the canonical place to give Claude host-specific context. The AI reads this on first contact before doing anything else. Treat it like a system prompt scoped to this host. |
 | `commands`     | required    | Array of allowlist rules.                                                                                     |
 
-There is no top-level `timeout`. Every command runs with a fixed 30-second deadline unless its rule sets its own `timeout`. Letting operators raise the global timeout would silently let runaway commands hold the JSON-RPC channel hostage; per-rule overrides preserve that guardrail while letting genuinely long-running diagnostics (e.g. `ping -c 100 host`) opt out.
-
 Fields on each command entry:
 
 | Field         | Default       | Meaning                                                                          |
@@ -100,14 +119,10 @@ Fields on each command entry:
 | `as`          | empty         | Users the command may run as. Empty means "the SSH user only". A non-empty list is a literal allowlist of target users (e.g. `["root"]` for root-only, `["rrsh", "root"]` for either). Entries must be valid POSIX login names. |
 | `description` | empty         | Free-text shown to Claude in `list_commands.commands[*].description`. Treat it like an API doc string. Control characters are stripped before being sent. |
 
-Rules:
+Notes:
 
-- The matcher requires `command[0]` to match the caller-supplied path - the string the AI sent as `command[0]` in the `run_command`/`run_pipeline` call (a regex, but most operators write a literal like `"/usr/bin/whoami"`). An additional defense-in-depth check requires that path to start with `/`, so accidentally-permissive regexes can't enable PATH-resolution of relative names.
-- `command[0]` can legitimately be a regex when you want one rule to cover related binaries - e.g. `"/usr/bin/(cat|head)"`.
-- Command-array matching is element-for-element. `["foo", "bar"]` (two elements) is structurally distinct from `["foo bar"]` (one element with a space) - the matcher counts elements separately, so an operator's regex written for two args can't be silently fooled by a single joined element. This is the structural guarantee that makes regex-on-argv safe against shell-injection-style attacks.
+- Commands must point to the full path of the binary, though regular expressions are allowed, e.g. `"/usr/bin/whoami"` or `"/usr/bin/(cat|head)"` or both fine.
 - Each entry of `command` is wrapped in `^(?:...)$` at parse time. Writing `"ntfy"` is equivalent to writing `"^ntfy$"` - both reject `"ntfy-extra"`.
-- **Multiple rules with the same `command[0]` are allowed** and useful. Each rule describes one command shape; the matcher tries them in declaration order and the first whose shape matches wins. Use this to express alternatives like `ps aux` vs `ps -ef` vs `ps -eo <fmt>`.
-- Unknown JSON fields are rejected - typos in the config fail fast rather than silently weakening the policy.
 
 ## How it works
 
@@ -211,7 +226,7 @@ The privileged half (`rrsh sudo <command...>`, hidden subcommand) re-reads `/etc
 
 ## Logging
 
-Decisions go to syslog under the `rrsh` tag, facility `auth`. Every record is `KIND: user=<SSH-user> cmd=<literal-exec-form>` - the cmd= field shows exactly what was (or would have been) handed to `os/exec`, including the sudo wrapping for elevated calls, so an auditor sees the literal invocation rather than the un-wrapped intent:
+rrsh logs audit decisions to syslog under the `rrsh` tag, facility `auth`. Entries may look like this:
 
 ```
 Mar  5 21:22:01 host rrsh[12345]: ALLOWED: user=rrsh cmd=/usr/bin/whoami
@@ -220,8 +235,6 @@ Mar  5 21:22:30 host rrsh[12347]: ALLOWED: user=rrsh cmd=/usr/bin/sudo -n -- /us
 Mar  5 21:22:45 host rrsh[12348]: DENIED: user=rrsh cmd=/usr/bin/sudo -n -- /usr/bin/rrsh sudo /usr/bin/whoami
 Mar  5 21:22:55 host rrsh[12349]: ALLOWED: user=rrsh cmd=/usr/bin/sudo -n -- /usr/bin/rrsh sudo /usr/bin/journalctl -u ntfy -n 1000 | /usr/bin/grep ERROR
 ```
-
-Pipelines are logged as the space-joined stages separated by ` | `. Only the unprivileged side writes records; the privileged `rrsh sudo` subcommand stays silent (the decision has already been logged). On Debian/Ubuntu these typically end up in `/var/log/auth.log`; on RHEL-likes in `/var/log/secure`.
 
 ## Build from source
 
@@ -232,5 +245,5 @@ go build -o rrsh .
 Requires Go 1.25+. No external dependencies - `go.mod` lists only the module itself.
 
 ## License
-Made with ❤️ by [Philipp C. Heckel](https://heckel.io).
+Made with ❤️ by [Philipp C. Heckel](https://heckel.io).   
 Licensed under the [Apache License 2.0](LICENSE).
