@@ -26,11 +26,15 @@ can use and tell it how to use rrsh. I did this in my own CLAUDE.md file like so
 ```
 ## SSH Access
 
-There is an SSH key at `~/Code/.ssh/id_claude` that can be used to connect to some servers for diagnosing issues.
+There is an SSH key at `~/Code/.ssh/id_claude` that can be used to connect to some servers
+for diagnosing issues. On some servers, an `rrsh` user is configured to expose the rrsh
+JSON-RPC server. 
 
-On some servers, an `rrsh` user is configured to expose the rrsh JSON-RPC server (see github.com/binwiederhier/rrsh project for details). Connect with: `ssh -T -i ~/Code/.ssh/id_claude rrsh@<server>`
+Connect with: `ssh -T -i ~/Code/.ssh/id_claude rrsh@<server>`. Use `-T` to disable PTY allocation:
+rrsh speaks JSON-RPC over stdin/stdout, not an interactive shell.
 
-Use `-T` to disable PTY allocation: rrsh speaks JSON-RPC over stdin/stdout, not an interactive shell.
+To get usage instructions and a list of allowed commands, run
+`echo '{"jsonrpc":"2.0","id":1,"method":"list_commands"}' | ssh -T -i ~/.ssh/id_claude rrsh@<server>`
 ```
 
 You can generate that key with `ssh-keygen -f ~/Code/.ssh/id_claude`. 
